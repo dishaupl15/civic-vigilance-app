@@ -10,12 +10,14 @@
  */
 
 import React, { useState } from 'react';
-import { ScrollView, View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Switch, Alert, ActivityIndicator } from 'react-native';
+import { ScrollView, View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Switch, Alert, ActivityIndicator, Share, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { saveProfile } from '../lib/profile';
 import { useAuth } from '../hooks/useAuth';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { isSupabaseConfigured } from '../lib/supabase';
+import { deleteCurrentAccount, exportCurrentAccount } from '../lib/accountApi';
+import { getBackend } from '../lib/backend';
 
 export default function SettingsScreen() {
   const navigation = useNavigation<any>();
@@ -103,12 +105,10 @@ export default function SettingsScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              if (isSupabaseConfigured && profile.uid) {
-                // Delete user data from profiles table
-                await supabase.from('profiles').delete().eq('id', profile.uid);
-                // Sign out (actual user deletion requires service role key on backend)
+              if (getBackend() === 'supabase' && isSupabaseConfigured) {
+                await deleteCurrentAccount();
                 await signOut();
-                Alert.alert('Account Deleted', 'Your account data has been removed. If you need full data purge, email support@civicvigilance.com.');
+                Alert.alert('Account Deleted', 'Your account and associated application data were permanently deleted.');
               } else {
                 await signOut();
               }
@@ -129,8 +129,26 @@ export default function SettingsScreen() {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Request Export',
-          onPress: () => {
-            Alert.alert('Request Sent', 'Your data export request has been submitted. You will receive an email at ' + (profile.email || 'your registered address') + ' within 72 hours.');
+          onPress: async () => {
+            try {
+              if (getBackend() !== 'supabase') {
+                return Alert.alert('Local Account', 'Local development accounts do not have a server data export.');
+              }
+              const exported = await exportCurrentAccount();
+              const json = JSON.stringify(exported, null, 2);
+              if (Platform.OS === 'web' && typeof document !== 'undefined') {
+                const href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+                const link = document.createElement('a');
+                link.href = href;
+                link.download = 'civic-vigilance-data-export.json';
+                link.click();
+                URL.revokeObjectURL(href);
+              } else {
+                await Share.share({ title: 'Civic Vigilance data export', message: json });
+              }
+            } catch (error: any) {
+              Alert.alert('Export Failed', error?.message || 'Could not export your data.');
+            }
           },
         },
       ]

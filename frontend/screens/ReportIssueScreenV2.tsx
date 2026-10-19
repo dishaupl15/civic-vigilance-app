@@ -7,16 +7,17 @@
  * → Stage 4 (Preview) → Stage 5 (Success)
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../hooks/useAuth';
 import { TwitterPostingMethod, CategoryKey } from '../types';
-import { generateAnonymousUsername } from '../lib/username';
 import { createIssue } from '../hooks/useIssues';
 import { uploadPhotos } from '../lib/storage';
 import { composePostText, shareToTwitter, showShareDialog } from '../lib/sharingEnhanced';
 import { getAuthorityHandles } from '../lib/smartAuthorities';
+import { clearReportDraft, saveReportDraft } from '../lib/reportDrafts';
+import * as Crypto from 'expo-crypto';
 
 // Import all 5 stage screens
 import Stage1CameraScreen from './reporting/Stage1CameraScreen';
@@ -30,8 +31,12 @@ type Stage = 1 | 2 | 3 | 4 | 5;
 interface ReportData {
   // Stage 1
   photos: string[];
-  coords: { lat: number; lng: number };
+  coords: { lat: number; lng: number } | null;
   address: string;
+  locationAccuracy?: number;
+  locationSource?: 'gps' | 'manual';
+  locationConfirmed?: boolean;
+  clientRequestId: string;
 
   // Stage 2
   title?: string;
@@ -45,6 +50,7 @@ interface ReportData {
   // Stage 4/5
   issueId?: string;
   tweetUrl?: string;
+  externalComposerOpened?: boolean;
 }
 
 export default function ReportIssueScreenV2() {
@@ -54,17 +60,24 @@ export default function ReportIssueScreenV2() {
   const [currentStage, setCurrentStage] = useState<Stage>(1);
   const [reportData, setReportData] = useState<ReportData>({
     photos: [],
-    coords: { lat: 0, lng: 0 },
+    coords: null,
     address: '',
+    clientRequestId: Crypto.randomUUID(),
   });
+  const submitting = useRef(false);
+
+  useEffect(() => {
+    if (currentStage < 5) void saveReportDraft({ currentStage, reportData });
+  }, [currentStage, reportData]);
 
   // Stage 1: Camera -> Stage 2: Details
   const handleStage1Complete = (
     photos: string[],
-    coords: { lat: number; lng: number },
-    address: string
+    coords: { lat: number; lng: number } | null,
+    address: string,
+    accuracy?: number
   ) => {
-    setReportData({ ...reportData, photos, coords, address });
+    setReportData((current) => ({ ...current, photos, coords, address, locationAccuracy: accuracy }));
     setCurrentStage(2);
   };
 
@@ -74,9 +87,11 @@ export default function ReportIssueScreenV2() {
     category: CategoryKey;
     description: string;
     address: string;
-    coords: { lat: number; lng: number };
+    coords: { lat: number; lng: number } | null;
+    locationSource: 'gps' | 'manual';
+    locationConfirmed: true;
   }) => {
-    setReportData({ ...reportData, ...data });
+    setReportData((current) => ({ ...current, ...data }));
     setCurrentStage(3);
   };
 
@@ -95,40 +110,56 @@ export default function ReportIssueScreenV2() {
 
   // Stage 4: Preview -> Submit -> Stage 5: Success
   const handleStage4Submit = async () => {
+    if (submitting.current) return;
+    submitting.current = true;
     try {
       if (__DEV__) console.log('[Report] Starting submission...');
 
       // Validate required fields
-      if (!reportData.title || !reportData.category) {
-        throw new Error('Missing required fields: title or category');
+      if (!reportData.title || !reportData.category || !reportData.description) {
+        throw new Error('Title, category and description are required.');
       }
+      if (reportData.photos.length === 0) throw new Error('At least one evidence photo is required.');
+      if (!reportData.locationConfirmed || !reportData.address.trim()) throw new Error('Confirm the report location before submitting.');
 
       // Step 1: Upload photos to Supabase Storage
       if (__DEV__) console.log('[Report] Uploading photos...');
-      const photoUrls = await uploadPhotos(reportData.photos, 'issues');
+      const photoUrls = await uploadPhotos(
+        reportData.photos,
+        'issues',
+        true,
+        reportData.clientRequestId,
+        reportData.privacy === 'none'
+      );
       if (__DEV__) console.log('[Report] Photos uploaded:', photoUrls);
 
       // Step 2: Create issue in database
       if (__DEV__) console.log('[Report] Creating issue in database...');
       const issueData = await createIssue({
+        client_request_id: reportData.clientRequestId,
+        user_id: session?.user?.id,
         title: reportData.title,
         description: reportData.description || '',
         category: reportData.category,
-        image_url: photoUrls[0], // Database expects single URL, use first photo
-        lat: reportData.coords.lat,
-        lng: reportData.coords.lng,
+        photos: photoUrls,
+        lat: reportData.coords?.lat,
+        lng: reportData.coords?.lng,
         address: reportData.address,
+        location_accuracy_m: reportData.locationAccuracy,
+        location_source: reportData.locationSource || 'manual',
+        location_confirmed: true,
+        privacy: reportData.privacy || 'none',
       });
 
       if (__DEV__) console.log('[Report] Issue created:', issueData);
 
       // Step 3: Share to Twitter via deep link (if user chose Twitter sharing)
-      let tweetUrl: string | undefined;
+      let externalComposerOpened = false;
       if (reportData.privacy === 'twitter') {
         if (__DEV__) console.log('[Report] Opening Twitter for sharing...');
         const authorities = getAuthorityHandles(
-          reportData.coords.lat,
-          reportData.coords.lng,
+          reportData.coords?.lat,
+          reportData.coords?.lng,
           reportData.address,
           reportData.category!
         );
@@ -136,27 +167,24 @@ export default function ReportIssueScreenV2() {
           title: reportData.title!,
           description: reportData.description,
           address: reportData.address,
-          lat: reportData.coords.lat,
-          lng: reportData.coords.lng,
-          authorities: authorities.length > 0 ? authorities : ['@mygovindia'],
+          lat: reportData.coords?.lat,
+          lng: reportData.coords?.lng,
+          authorities,
           category: reportData.category,
         });
-        await shareToTwitter({ text: tweetText });
+        externalComposerOpened = await shareToTwitter({ text: tweetText });
+        if (!externalComposerOpened) throw new Error('The X/Twitter composer could not be opened. Your report was saved in the app.');
       }
-
-      // Generate anonymous username for this post
-      const anonymousUsername = session?.user
-        ? generateAnonymousUsername()
-        : 'Anonymous_Citizen_0000';
 
       // Update report data with submission results
       setReportData({
         ...reportData,
         issueId: issueData.id,
-        tweetUrl,
+        externalComposerOpened,
       });
 
       if (__DEV__) console.log('[Report] Submission successful!');
+      await clearReportDraft();
       setCurrentStage(5);
     } catch (error: any) {
       console.error('[Report] Submission error:', error);
@@ -165,6 +193,8 @@ export default function ReportIssueScreenV2() {
         error.message || 'Failed to submit your report. Please try again.',
         [{ text: 'OK' }]
       );
+    } finally {
+      submitting.current = false;
     }
   };
 
@@ -187,8 +217,8 @@ export default function ReportIssueScreenV2() {
       title: reportData.title || '',
       description: reportData.description,
       address: reportData.address,
-      lat: reportData.coords.lat,
-      lng: reportData.coords.lng,
+      lat: reportData.coords?.lat,
+      lng: reportData.coords?.lng,
       category: reportData.category,
     });
     showShareDialog({ text: tweetText });
@@ -199,8 +229,9 @@ export default function ReportIssueScreenV2() {
     setCurrentStage(1);
     setReportData({
       photos: [],
-      coords: { lat: 0, lng: 0 },
+      coords: null,
       address: '',
+      clientRequestId: Crypto.randomUUID(),
     });
     // @ts-ignore
     navigation.navigate('Home');
@@ -221,6 +252,7 @@ export default function ReportIssueScreenV2() {
           photos={reportData.photos}
           initialAddress={reportData.address}
           coords={reportData.coords}
+          accuracy={reportData.locationAccuracy}
           onContinue={handleStage2Complete}
           onBack={() => handleBack(1)}
         />
@@ -255,6 +287,7 @@ export default function ReportIssueScreenV2() {
           issueId={reportData.issueId || ''}
           privacy={reportData.privacy || 'twitter'}
           tweetUrl={reportData.tweetUrl}
+          externalComposerOpened={reportData.externalComposerOpened}
           onViewPost={handleViewPost}
           onShareMore={handleShareMore}
           onDone={handleDone}

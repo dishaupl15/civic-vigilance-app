@@ -110,9 +110,9 @@ export default function Stage3PrivacyScreen({ onContinue, onBack, defaultMethod 
             />
           </View>
           <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={styles.optionTitle}>App Only</Text>
+              <Text style={styles.optionTitle}>Private Report</Text>
             <Text style={styles.optionSubtitle}>
-              Visible only to CivicVigilance users. No Twitter posting.
+              Visible only to you. No external sharing or public-feed publication.
             </Text>
           </View>
         </View>
@@ -120,7 +120,7 @@ export default function Stage3PrivacyScreen({ onContinue, onBack, defaultMethod 
         <View style={styles.featureList}>
           <View style={styles.featureRow}>
             <Ionicons name="checkmark-circle" size={20} color="#34D399" />
-            <Text style={styles.featureText}>Visible to app community</Text>
+            <Text style={styles.featureText}>Stored as a private report</Text>
           </View>
           <View style={styles.featureRow}>
             <Ionicons name="close-circle" size={20} color="#EF4444" />

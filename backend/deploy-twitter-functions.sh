@@ -1,56 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Deploy Twitter Edge Functions to Supabase
+echo "Deploying retired X/Twitter endpoints so older clients fail closed."
 
-set -e
+for function_name in post-tweet-civic post-tweet-user twitter-auth disconnect-twitter; do
+  npx --yes supabase@2.121.0 functions deploy "$function_name"
+done
 
-echo "╔════════════════════════════════════════════════════════════╗"
-echo "║  Deploying Twitter Edge Functions to Supabase             ║"
-echo "╚════════════════════════════════════════════════════════════╝"
-echo ""
-
-# Using npx supabase (no global install needed)
-echo "✅ Using Supabase CLI via npx"
-
-echo "📦 Deploying functions..."
-echo ""
-
-# Deploy each function
-echo "🚀 Deploying post-tweet-civic..."
-npx supabase functions deploy post-tweet-civic
-
-echo ""
-echo "🚀 Deploying post-tweet-user..."
-npx supabase functions deploy post-tweet-user
-
-echo ""
-echo "🚀 Deploying twitter-auth..."
-npx supabase functions deploy twitter-auth
-
-echo ""
-echo "🚀 Deploying disconnect-twitter..."
-npx supabase functions deploy disconnect-twitter
-
-echo ""
-echo "✅ All functions deployed successfully!"
-echo ""
-
-# List deployed functions
-echo "📋 Deployed functions:"
-npx supabase functions list
-
-echo ""
-echo "╔════════════════════════════════════════════════════════════╗"
-echo "║  Deployment complete!                                      ║"
-echo "╚════════════════════════════════════════════════════════════╝"
-echo ""
-
-echo "Your functions are now available at:"
-echo "  https://YOUR_PROJECT_REF.supabase.co/functions/v1/post-tweet-civic"
-echo "  https://YOUR_PROJECT_REF.supabase.co/functions/v1/post-tweet-user"
-echo "  https://YOUR_PROJECT_REF.supabase.co/functions/v1/twitter-auth"
-echo "  https://YOUR_PROJECT_REF.supabase.co/functions/v1/disconnect-twitter"
-echo ""
-
-echo "Next step: Update your .env file!"
-echo ""
+echo "Retired endpoints deployed. The current app uses the user's X composer."

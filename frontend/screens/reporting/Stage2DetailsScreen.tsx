@@ -1,331 +1,148 @@
-/**
- * Stage 2: Add Details
- * PRD Section 5.2 - Stage 2: Add Details
- *
- * Features:
- * - Title field (max 80 chars)
- * - Category selector (11 categories with emojis)
- * - Description field (max 500 chars, optional)
- * - Location confirmation with map preview
- */
-
 import React, { useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  Image,
-  Pressable,
   Alert,
+  Image,
+  KeyboardAvoidingView,
+  Linking,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Button from '../../components/ui/Button';
 import CategoryPicker, { CategoryKey } from '../../components/CategoryPicker';
-import { Colors, Shadows, Typography, Layout, BorderRadius } from '../../constants/DesignSystem';
+import { BorderRadius, Colors, Shadows, Typography } from '../../constants/DesignSystem';
+import { parseOptionalCoordinates } from '../../lib/reportValidation';
 
 interface Props {
   photos: string[];
   initialAddress: string;
-  coords: { lat: number; lng: number };
+  coords: { lat: number; lng: number } | null;
+  accuracy?: number;
   onContinue: (data: {
     title: string;
     category: CategoryKey;
     description: string;
     address: string;
-    coords: { lat: number; lng: number };
+    coords: { lat: number; lng: number } | null;
+    locationSource: 'gps' | 'manual';
+    locationConfirmed: true;
   }) => void;
   onBack: () => void;
 }
 
-export default function Stage2DetailsScreen({
-  photos,
-  initialAddress,
-  coords,
-  onContinue,
-  onBack,
-}: Props) {
+export default function Stage2DetailsScreen({ photos, initialAddress, coords, accuracy, onContinue, onBack }: Props) {
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<CategoryKey>('pothole');
   const [description, setDescription] = useState('');
   const [address, setAddress] = useState(initialAddress);
-  const [isEditingAddress, setIsEditingAddress] = useState(false);
+  const [editingLocation, setEditingLocation] = useState(!initialAddress);
+  const [latitude, setLatitude] = useState(coords ? String(coords.lat) : '');
+  const [longitude, setLongitude] = useState(coords ? String(coords.lng) : '');
 
   const handleContinue = () => {
-    if (!title.trim()) {
-      Alert.alert('Title Required', 'Please enter a short title for the issue.');
-      return;
-    }
+    if (!title.trim()) return Alert.alert('Title Required', 'Please enter a short factual title.');
+    if (!description.trim()) return Alert.alert('Description Required', 'Describe the visible civic issue.');
+    if (!address.trim()) return Alert.alert('Location Required', 'Confirm the detected address or enter it manually.');
 
-    if (title.length > 80) {
-      Alert.alert('Title Too Long', 'Title must be 80 characters or less.');
-      return;
-    }
-
+    const parsed = parseOptionalCoordinates(latitude, longitude);
+    if (parsed.error) return Alert.alert('Invalid Coordinates', parsed.error);
+    const confirmedCoords = parsed.coordinates;
+    const unchangedGps = !!coords && confirmedCoords?.lat === coords.lat && confirmedCoords?.lng === coords.lng;
     onContinue({
       title: title.trim(),
       category,
       description: description.trim(),
-      address,
-      coords,
+      address: address.trim(),
+      coords: confirmedCoords,
+      locationSource: unchangedGps ? 'gps' : 'manual',
+      locationConfirmed: true,
     });
   };
 
-  // Auto-suggest title based on category (PRD feature)
   const suggestTitle = () => {
-    const suggestions: Record<CategoryKey, string> = {
-      pothole: `Pothole near ${address.split(',')[0]}`,
-      garbage: `Garbage issue at ${address.split(',')[0]}`,
-      streetlight: `Streetlight not working on ${address.split(',')[0]}`,
-      drainage: `Drainage problem at ${address.split(',')[0]}`,
-      water_supply: `Water supply issue on ${address.split(',')[0]}`,
-      sewage: `Sewage overflow at ${address.split(',')[0]}`,
-      traffic_signal: `Traffic signal fault at ${address.split(',')[0]}`,
-      encroachment: `Encroachment on ${address.split(',')[0]}`,
-      stray_animals: `Stray animals at ${address.split(',')[0]}`,
-      parks: `Park maintenance needed at ${address.split(',')[0]}`,
-      other: `Civic issue at ${address.split(',')[0]}`,
+    const place = address.split(',')[0]?.trim() || 'confirmed location';
+    const labels: Record<CategoryKey, string> = {
+      pothole: 'Pothole', garbage: 'Garbage issue', streetlight: 'Streetlight issue', drainage: 'Drainage issue',
+      water_supply: 'Water supply issue', sewage: 'Sewage issue', traffic_signal: 'Traffic signal issue',
+      encroachment: 'Possible encroachment', stray_animals: 'Stray animal issue', parks: 'Park maintenance issue', other: 'Civic issue',
     };
-    setTitle(suggestions[category] || '');
+    setTitle(`${labels[category]} near ${place}`.slice(0, 80));
   };
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView
-        contentContainerStyle={styles.container}
-        keyboardShouldPersistTaps="handled"
-      >
-        {/* Photo Preview */}
-        <View style={styles.photoSection}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {photos.map((photo, index) => (
-              <Image key={index} source={{ uri: photo }} style={styles.photoPreview} />
-            ))}
-          </ScrollView>
-        </View>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoSection}>
+          {photos.map((photo) => <Image key={photo} source={{ uri: photo }} style={styles.photoPreview} resizeMode="cover" />)}
+        </ScrollView>
 
-        {/* Title Section */}
         <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Text style={styles.sectionTitle}>Title</Text>
-            <Text style={styles.charCount}>{title.length}/80</Text>
-          </View>
-          <TextInput
-            style={styles.input}
-            placeholder="Short title (e.g., Pothole on MG Road)"
-            placeholderTextColor="#9CA3AF"
-            value={title}
-            onChangeText={setTitle}
-            maxLength={80}
-          />
-          <Pressable onPress={suggestTitle}>
-            <Text style={styles.suggestLink}>💡 Auto-suggest based on category</Text>
-          </Pressable>
+          <View style={styles.cardHeader}><Text style={styles.sectionTitle}>Title</Text><Text style={styles.charCount}>{title.length}/80</Text></View>
+          <TextInput style={styles.input} placeholder="Short factual title" value={title} onChangeText={setTitle} maxLength={80} />
+          <Pressable onPress={suggestTitle}><Text style={styles.link}>Suggest from category and location</Text></Pressable>
         </View>
 
-        {/* Category Section */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Category</Text>
-          <Text style={styles.subtitle}>Select the type of issue</Text>
           <CategoryPicker value={category} onChange={setCategory} />
         </View>
 
-        {/* Description Section */}
         <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Text style={styles.sectionTitle}>Description (Optional)</Text>
-            <Text style={styles.charCount}>{description.length}/500</Text>
-          </View>
-          <TextInput
-            style={[styles.input, styles.textArea]}
-            placeholder="Add context: How long has this been here? Who is affected?"
-            placeholderTextColor="#9CA3AF"
-            value={description}
-            onChangeText={setDescription}
-            maxLength={500}
-            multiline
-            numberOfLines={5}
-            textAlignVertical="top"
-          />
+          <View style={styles.cardHeader}><Text style={styles.sectionTitle}>Visible details</Text><Text style={styles.charCount}>{description.length}/500</Text></View>
+          <TextInput style={[styles.input, styles.textArea]} placeholder="Describe only what you observed" value={description} onChangeText={setDescription} maxLength={500} multiline />
         </View>
 
-        {/* Location Confirmation Section */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>
-            <Text style={styles.sectionTitle}>📍 Location Confirmation</Text>
-            <Pressable onPress={() => setIsEditingAddress(!isEditingAddress)}>
-              <Text style={styles.editLink}>{isEditingAddress ? 'Done' : 'Edit'}</Text>
-            </Pressable>
+            <Text style={styles.sectionTitle}>Location confirmation</Text>
+            <Pressable onPress={() => setEditingLocation((value) => !value)}><Text style={styles.link}>{editingLocation ? 'Done' : 'Edit'}</Text></Pressable>
           </View>
-
-          <View style={styles.locationBox}>
-            {isEditingAddress ? (
-              <TextInput
-                style={[styles.input, styles.addressInput]}
-                value={address}
-                onChangeText={setAddress}
-                multiline
-              />
-            ) : (
-              <Text style={styles.addressText}>{address}</Text>
-            )}
-
-            <Text style={styles.coordsText}>
-              {coords.lat.toFixed(5)}°N, {coords.lng.toFixed(5)}°E
-            </Text>
-
-            {/* TODO: Add map preview in v1.5 */}
-            <Pressable style={styles.mapLink}>
-              <Ionicons name="map-outline" size={16} color={Colors.primary} />
-              <Text style={styles.mapLinkText}>View on map</Text>
-            </Pressable>
-          </View>
-          <Text style={styles.hintText}>
-            Tap coordinates to copy • Location helps tag the right authorities
-          </Text>
+          {editingLocation ? (
+            <>
+              <TextInput style={[styles.input, styles.textAreaSmall]} value={address} onChangeText={setAddress} multiline placeholder="Street, landmark, city and state" />
+              <View style={styles.coordinateRow}>
+                <TextInput style={[styles.input, styles.coordinateInput]} value={latitude} onChangeText={setLatitude} keyboardType="numbers-and-punctuation" placeholder="Latitude (optional)" />
+                <TextInput style={[styles.input, styles.coordinateInput]} value={longitude} onChangeText={setLongitude} keyboardType="numbers-and-punctuation" placeholder="Longitude (optional)" />
+              </View>
+            </>
+          ) : <Text style={styles.address}>{address}</Text>}
+          <Text style={styles.meta}>{coords ? `GPS detected${accuracy ? `, accuracy ±${Math.round(accuracy)}m` : ''}` : 'GPS unavailable; this address will be marked as manually confirmed'}</Text>
+          <Pressable disabled={!coords} style={[styles.mapLink, !coords && { opacity: 0.45 }]} onPress={() => coords && Linking.openURL(`https://maps.google.com/?q=${coords.lat},${coords.lng}`)}>
+            <Ionicons name="map-outline" size={16} color={Colors.primary} />
+            <Text style={styles.link}>{coords ? 'Review detected pin on map' : 'No detected map pin'}</Text>
+          </Pressable>
         </View>
-
-        <View style={{ height: 100 }} />
+        <View style={{ height: 110 }} />
       </ScrollView>
-
-      {/* Bottom Navigation */}
       <View style={styles.bottomNav}>
-        <Button
-          title="← Edit Photos"
-          onPress={onBack}
-          variant="outline"
-          style={{ flex: 1 }}
-        />
-        <Button
-          title="Next: Privacy"
-          onPress={handleContinue}
-          style={{ flex: 2 }}
-          disabled={!title.trim()}
-        />
+        <Button title="Edit Photos" onPress={onBack} variant="outline" style={{ flex: 1 }} />
+        <Button title="Confirm & Continue" onPress={handleContinue} style={{ flex: 2 }} disabled={!title.trim() || !description.trim() || !address.trim()} />
       </View>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    padding: 16,
-    backgroundColor: Colors.background,
-    paddingBottom: 120,
-  },
-  photoSection: {
-    marginBottom: 16,
-  },
-  photoPreview: {
-    width: 120,
-    height: 120,
-    borderRadius: BorderRadius.md,
-    marginRight: 12,
-  },
-  card: {
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.md,
-    padding: 16,
-    marginBottom: 16,
-    ...Shadows.sm,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  sectionTitle: {
-    fontSize: Typography.h4.fontSize,
-    fontWeight: Typography.h4.fontWeight,
-    color: Colors.textMain,
-  },
-  subtitle: {
-    fontSize: Typography.bodySm.fontSize,
-    color: Colors.textSecondary,
-    marginBottom: 12,
-  },
-  charCount: {
-    fontSize: 12,
-    color: Colors.textMuted,
-  },
-  input: {
-    backgroundColor: Colors.background,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: BorderRadius.sm,
-    padding: 12,
-    fontSize: 16,
-    color: Colors.textMain,
-  },
-  textArea: {
-    height: 110,
-    textAlignVertical: 'top',
-  },
-  suggestLink: {
-    marginTop: 8,
-    fontSize: 14,
-    color: Colors.primary,
-  },
-  locationBox: {
-    backgroundColor: Colors.background,
-    borderRadius: BorderRadius.sm,
-    padding: 12,
-  },
-  addressText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: Colors.textMain,
-    marginBottom: 4,
-  },
-  coordsText: {
-    fontSize: 13,
-    color: Colors.textSecondary,
-    marginBottom: 8,
-  },
-  mapLink: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  mapLinkText: {
-    fontSize: 14,
-    color: Colors.primary,
-    fontWeight: '500',
-  },
-  hintText: {
-    fontSize: 12,
-    color: Colors.textMuted,
-    marginTop: 8,
-  },
-  bottomNav: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    bottom: 24,
-    flexDirection: 'row',
-    gap: 12,
-    backgroundColor: Colors.surface,
-    padding: 12,
-    borderRadius: BorderRadius.md,
-    ...Shadows.lg,
-  },
-  editLink: {
-    fontSize: 14,
-    color: Colors.primary,
-    fontWeight: '600',
-  },
-  addressInput: {
-    backgroundColor: Colors.surface,
-    marginBottom: 8,
-    fontSize: 15,
-    fontWeight: '600',
-    color: Colors.textMain,
-  },
+  container: { padding: 16, paddingBottom: 120, backgroundColor: Colors.background },
+  photoSection: { marginBottom: 16 },
+  photoPreview: { width: 120, height: 120, borderRadius: BorderRadius.md, marginRight: 12 },
+  card: { backgroundColor: Colors.surface, borderRadius: BorderRadius.md, padding: 16, marginBottom: 16, ...Shadows.sm },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  sectionTitle: { ...Typography.h4, marginBottom: 8 },
+  charCount: { fontSize: 12, color: Colors.textMuted },
+  input: { backgroundColor: Colors.background, borderWidth: 1, borderColor: Colors.border, borderRadius: BorderRadius.sm, padding: 12, fontSize: 15, color: Colors.textMain },
+  textArea: { height: 110, textAlignVertical: 'top' },
+  textAreaSmall: { minHeight: 70, textAlignVertical: 'top', marginBottom: 8 },
+  link: { marginTop: 8, fontSize: 14, color: Colors.primary, fontWeight: '600' },
+  address: { fontSize: 15, color: Colors.textMain, fontWeight: '600' },
+  meta: { marginTop: 8, fontSize: 12, color: Colors.textSecondary },
+  coordinateRow: { flexDirection: 'row', gap: 8 },
+  coordinateInput: { flex: 1, fontSize: 13 },
+  mapLink: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6 },
+  bottomNav: { position: 'absolute', left: 16, right: 16, bottom: 24, flexDirection: 'row', gap: 12, backgroundColor: Colors.surface, padding: 12, borderRadius: BorderRadius.md, ...Shadows.lg },
 });

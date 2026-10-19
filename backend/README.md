@@ -1,6 +1,6 @@
 # Civic Vigilance Backend
 
-This folder contains the Civic Vigilance Node.js API, Supabase Edge Functions and migrations, and database schemas.
+This folder contains the Civic Vigilance Node.js API, Supabase migrations, and retired Edge Function endpoints.
 
 ## Table of Contents
 
@@ -37,7 +37,7 @@ npm start
 ```
 The server will be running on `http://localhost:3000`; API routes are mounted under `/api`.
 
-Use `./setup-twitter-from-env.sh` to upload the Twitter values from `.env` to Supabase secrets.
+X sharing is user-mediated through the frontend composer. The backend does not collect or store X OAuth tokens.
 
 ## Testing
 

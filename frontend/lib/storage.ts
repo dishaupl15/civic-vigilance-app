@@ -13,10 +13,16 @@
 
 import { supabase, isSupabaseConfigured } from './supabase';
 import { getBackend } from './backend';
-import { optimizeImage } from './imageOptimizer';
+import { optimizeImage, needsOptimization } from './imageOptimizer';
+import * as FileSystem from 'expo-file-system';
+import * as Crypto from 'expo-crypto';
 
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const STORAGE_BUCKET = process.env.EXPO_PUBLIC_STORAGE_BUCKET || 'issue-photos';
+const PRIVATE_STORAGE_BUCKET = process.env.EXPO_PUBLIC_PRIVATE_STORAGE_BUCKET || 'private-issue-photos';
+const STORAGE_REFERENCE_PREFIX = 'supabase-storage://';
 
 /** Exponential backoff retry helper */
 async function withRetry<T>(fn: () => Promise<T>, maxRetries = MAX_RETRIES): Promise<T> {
@@ -47,7 +53,9 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = MAX_RETRIES): Pro
 export async function uploadPhoto(
   uri: string,
   folder: string = 'issues',
-  optimize: boolean = true
+  optimize: boolean = true,
+  stableKey?: string,
+  isPrivate: boolean = false
 ): Promise<string> {
   if (getBackend() !== 'supabase' || !isSupabaseConfigured) {
     // For SQLite backend, just return the local URI
@@ -61,7 +69,7 @@ export async function uploadPhoto(
     let uploadUri = uri;
 
     // Optimize image before upload for faster speeds
-    if (optimize) {
+    if (optimize && await needsOptimization(uri)) {
       if (__DEV__) console.log('[Storage] Compressing image...');
       const optimized = await optimizeImage(uri, {
         maxWidth: 1920,
@@ -70,49 +78,66 @@ export async function uploadPhoto(
         format: 'jpeg',
       });
       uploadUri = optimized.uri;
-      if (__DEV__) console.log(`[Storage] Compression saved ${((1 - optimized.size / 1024 / 1024) * 100).toFixed(1)}% bandwidth`);
+      if (__DEV__) console.log(`[Storage] Optimized image size: ${optimized.size} bytes`);
     }
 
     // Convert local URI to blob for upload
     const response = await fetch(uploadUri);
     const blob = await response.blob();
+    if (!blob.type.startsWith('image/')) throw new Error('Only image uploads are supported.');
+    if (blob.size <= 0 || blob.size > MAX_UPLOAD_BYTES) throw new Error('Photo must be between 1 byte and 10 MB after compression.');
 
     // Generate unique filename
     const fileExt = 'jpg'; // Always use jpg after optimization
-    const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
-    const filePath = `${folder}/${fileName}`;
+    const safeKey = stableKey?.replace(/[^a-zA-Z0-9_-]/g, '') || Crypto.randomUUID();
+    const fileName = `${safeKey}.${fileExt}`;
+    const { data: authData } = await supabase.auth.getSession();
+    const userId = authData?.session?.user?.id;
+    if (!userId) throw new Error('Sign in before uploading report evidence.');
+    const filePath = `${userId}/${folder}/${fileName}`;
+    const bucket = isPrivate ? PRIVATE_STORAGE_BUCKET : STORAGE_BUCKET;
 
     if (__DEV__) console.log('[Storage] Uploading to Supabase Storage...');
 
     // Upload to Supabase Storage with retry
     const publicUrl = await withRetry(async () => {
       const { data, error } = await supabase.storage
-        .from('civic-vigilance')
+        .from(bucket)
         .upload(filePath, blob, {
           contentType: 'image/jpeg',
           cacheControl: '3600',
-          upsert: false,
+          upsert: Boolean(stableKey),
         });
 
       if (error) {
         throw new Error(`Failed to upload photo: ${error.message}`);
       }
 
-      // Get public URL
+      if (isPrivate) {
+        // Persist an object reference, never a signed URL that will expire.
+        return `${STORAGE_REFERENCE_PREFIX}${bucket}/${data.path}`;
+      }
+
+      // Public reports can persist the stable public object URL.
       const { data: { publicUrl: url } } = supabase.storage
-        .from('civic-vigilance')
+        .from(bucket)
         .getPublicUrl(filePath);
 
       return url;
     });
 
     const uploadTime = Date.now() - startTime;
-    if (__DEV__) console.log(`[Storage] Upload complete in ${uploadTime}ms: ${publicUrl}`);
+    if (!/^https:\/\//i.test(publicUrl) && !publicUrl.startsWith(STORAGE_REFERENCE_PREFIX)) {
+      throw new Error('Storage did not return a valid photo reference.');
+    }
+    if (__DEV__) console.log(`[Storage] Upload complete in ${uploadTime}ms`);
+    if (uploadUri !== uri && uploadUri.startsWith('file:')) {
+      await FileSystem.deleteAsync(uploadUri, { idempotent: true }).catch(() => undefined);
+    }
     return publicUrl;
   } catch (error: any) {
     console.error('[Storage] Upload failed after retries:', error);
-    // Fallback to local URI if upload fails
-    return uri;
+    throw new Error(error?.message || 'Photo upload failed. Your draft has been preserved.');
   }
 }
 
@@ -127,15 +152,23 @@ export async function uploadPhoto(
 export async function uploadPhotos(
   uris: string[],
   folder: string = 'issues',
-  optimize: boolean = true
+  optimize: boolean = true,
+  requestId?: string,
+  isPrivate: boolean = false
 ): Promise<string[]> {
   if (__DEV__) console.log(`[Storage] Uploading ${uris.length} photos in parallel...`);
 
   const startTime = Date.now();
 
-  // Upload all photos in parallel for maximum speed
-  const uploadPromises = uris.map(uri => uploadPhoto(uri, folder, optimize));
-  const urls = await Promise.all(uploadPromises);
+  if (uris.length === 0 || uris.length > 3) throw new Error('Choose between one and three photos.');
+  const urls: string[] = [];
+  for (let index = 0; index < uris.length; index += 2) {
+    const batch = uris.slice(index, index + 2);
+    urls.push(...await Promise.all(batch.map((uri, batchIndex) => {
+      const absoluteIndex = index + batchIndex;
+      return uploadPhoto(uri, folder, optimize, requestId ? `${requestId}-${absoluteIndex}` : undefined, isPrivate);
+    })));
+  }
 
   const totalTime = Date.now() - startTime;
   const avgTime = (totalTime / uris.length).toFixed(0);
@@ -145,6 +178,25 @@ export async function uploadPhotos(
     console.log(`[Storage] Successfully uploaded ${urls.length} photos`);
   }
   return urls;
+}
+
+/** Resolve a persisted private object reference to a short-lived display URL. */
+export async function resolvePhotoUrl(reference: string): Promise<string> {
+  if (!reference.startsWith(STORAGE_REFERENCE_PREFIX)) return reference;
+  if (getBackend() !== 'supabase' || !isSupabaseConfigured) return reference;
+
+  const value = reference.slice(STORAGE_REFERENCE_PREFIX.length);
+  const separator = value.indexOf('/');
+  if (separator <= 0 || separator === value.length - 1) throw new Error('Invalid storage photo reference.');
+  const bucket = value.slice(0, separator);
+  const path = value.slice(separator + 1);
+  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 60);
+  if (error || !data?.signedUrl) throw new Error(error?.message || 'Could not authorize private photo access.');
+  return data.signedUrl;
+}
+
+export async function resolvePhotoUrls(references: string[]): Promise<string[]> {
+  return Promise.all(references.map(resolvePhotoUrl));
 }
 
 /**
@@ -158,17 +210,22 @@ export async function deletePhoto(url: string): Promise<void> {
   }
 
   try {
-    // Extract file path from URL
-    const urlParts = url.split('/civic-vigilance/');
-    if (urlParts.length < 2) {
-      console.warn('[Storage] Invalid URL format:', url);
-      return;
+    let bucket = STORAGE_BUCKET;
+    let filePath = '';
+    if (url.startsWith(STORAGE_REFERENCE_PREFIX)) {
+      const value = url.slice(STORAGE_REFERENCE_PREFIX.length);
+      const separator = value.indexOf('/');
+      bucket = value.slice(0, separator);
+      filePath = value.slice(separator + 1);
+    } else {
+      const marker = `/storage/v1/object/public/${STORAGE_BUCKET}/`;
+      const markerIndex = url.indexOf(marker);
+      if (markerIndex >= 0) filePath = decodeURIComponent(url.slice(markerIndex + marker.length));
     }
-
-    const filePath = urlParts[1];
+    if (!bucket || !filePath) throw new Error('Invalid storage photo reference.');
 
     const { error } = await supabase.storage
-      .from('civic-vigilance')
+      .from(bucket)
       .remove([filePath]);
 
     if (error) {

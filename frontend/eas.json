@@ -1,49 +1,23 @@
 {
-    "cli":  {
-                "version":  "\u003e= 16.0.0"
-            },
-    "build":  {
-                  "development":  {
-                                      "developmentClient":  true,
-                                      "distribution":  "internal",
-                                      "android":  {
-                                                      "gradleCommand":  ":app:assembleDebug",
-                                                      "buildType":  "apk"
-                                                  },
-                                      "ios":  {
-                                                  "buildConfiguration":  "Debug"
-                                              }
-                                  },
-                  "preview":  {
-                                  "distribution":  "internal",
-                                  "android":  {
-                                                  "buildType":  "apk"
-                                              },
-                                  "ios":  {
-                                              "simulator":  false
-                                          }
-                              },
-                  "production":  {
-                                     "distribution":  "store",
-                                     "android":  {
-                                                     "buildType":  "app-bundle"
-                                                 },
-                                     "ios":  {
-                                                 "simulator":  false
-                                             }
-                                 }
-              },
-    "submit":  {
-                   "production":  {
-                                      "android":  {
-                                                      "serviceAccountKeyPath":  "./android-service-account.json",
-                                                      "track":  "internal"
-                                                  },
-                                      "ios":  {
-                                                  "appleId":  "your-apple-id@example.com",
-                                                  "ascAppId":  "your-asc-app-id",
-                                                  "appleTeamId":  "your-team-id"
-                                              }
-                                  }
-               }
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "environment": "development"
+    },
+    "preview": {
+      "distribution": "internal",
+      "environment": "preview",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "environment": "production"
+    }
+  },
+  "submit": {
+    "production": {}
+  }
 }

@@ -16,11 +16,13 @@ import { encodeGeohash } from './geohash';
 import { AUTHORITIES_SEED_DATA } from './authoritiesData';
 import { IssueCategory } from '../types';
 
-interface MatchedAuthority {
+export interface MatchedAuthority {
   handle: string;
   name: string;
   confidence: number; // 0-1 based on match quality
   matchReason: string; // For debugging
+  sourceUrl?: string;
+  verificationStatus: 'verified' | 'seed' | 'expired';
 }
 
 /**
@@ -75,8 +77,8 @@ function parseAddress(address: string): {
  * @returns Array of matched authority handles with confidence scores
  */
 export function findAuthorities(
-  lat: number,
-  lng: number,
+  lat: number | undefined,
+  lng: number | undefined,
   address: string,
   category: IssueCategory
 ): MatchedAuthority[] {
@@ -87,28 +89,32 @@ export function findAuthorities(
 
   console.log('[SmartAuthorities] Parsed address:', { city, state, pinCode });
 
-  // Step 2: Convert GPS to geohash (precision 4 for ~20km area)
-  const geohash = encodeGeohash(lat, lng, 4);
+  const hasCoordinates = typeof lat === 'number' && typeof lng === 'number' &&
+    Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+  const geohash = hasCoordinates ? encodeGeohash(lat, lng, 4) : '';
   const geohashPrefix = geohash.substring(0, 4);
 
   console.log('[SmartAuthorities] Geohash:', geohash, 'Prefix:', geohashPrefix);
 
   // Step 3: Match authorities by geohash
-  const geohashMatches = AUTHORITIES_SEED_DATA.filter((auth) => {
+  const geohashMatches = hasCoordinates ? AUTHORITIES_SEED_DATA.filter((auth) => {
     // Check if any of the authority's geohashes match our location
     return auth.jurisdiction.geohashes.some((authGeohash) =>
       authGeohash.startsWith(geohashPrefix.substring(0, 3)) // Match first 3 chars (~150km)
     );
-  });
+  }) : [];
 
   // Add geohash matches
   geohashMatches.forEach((auth) => {
-    if (auth.issueCategories.includes(category) && auth.socialMedia?.twitter?.active) {
+    const handle = auth.socialMedia?.twitter?.handle || auth.twitter;
+    if (auth.issueCategories.includes(category) && handle) {
       matches.push({
-        handle: auth.socialMedia.twitter.handle || '',
+        handle,
         name: auth.name,
         confidence: auth.priority === 1 ? 0.9 : 0.7,
         matchReason: 'Geohash + Category match',
+        sourceUrl: auth.contactInfo?.website,
+        verificationStatus: 'seed',
       });
     }
   });
@@ -123,12 +129,15 @@ export function findAuthorities(
 
     cityMatches.forEach((auth) => {
       // Avoid duplicates and check Twitter is active
-      if (!matches.find((m) => m.handle === auth.socialMedia?.twitter?.handle) && auth.socialMedia?.twitter?.active) {
+      const handle = auth.socialMedia?.twitter?.handle || auth.twitter;
+      if (handle && !matches.find((m) => m.handle === handle)) {
         matches.push({
-          handle: auth.socialMedia.twitter.handle || '',
+          handle,
           name: auth.name,
           confidence: auth.priority === 1 ? 0.8 : 0.6,
           matchReason: 'City + Category match',
+          sourceUrl: auth.contactInfo?.website,
+          verificationStatus: 'seed',
         });
       }
     });
@@ -143,12 +152,15 @@ export function findAuthorities(
     );
 
     stateMatches.forEach((auth) => {
-      if (!matches.find((m) => m.handle === auth.socialMedia?.twitter?.handle) && auth.socialMedia?.twitter?.active) {
+      const handle = auth.socialMedia?.twitter?.handle || auth.twitter;
+      if (handle && !matches.find((m) => m.handle === handle)) {
         matches.push({
-          handle: auth.socialMedia.twitter.handle || '',
+          handle,
           name: auth.name,
           confidence: auth.priority === 1 ? 0.6 : 0.4,
           matchReason: 'State + Category match',
+          sourceUrl: auth.contactInfo?.website,
+          verificationStatus: 'seed',
         });
       }
     });
@@ -163,12 +175,15 @@ export function findAuthorities(
     );
 
     nationalMatches.forEach((auth) => {
-      if (!matches.find((m) => m.handle === auth.socialMedia?.twitter?.handle) && auth.socialMedia?.twitter?.active) {
+      const handle = auth.socialMedia?.twitter?.handle || auth.twitter;
+      if (handle && !matches.find((m) => m.handle === handle)) {
         matches.push({
-          handle: auth.socialMedia.twitter.handle || '',
+          handle,
           name: auth.name,
           confidence: 0.3,
           matchReason: 'National fallback',
+          sourceUrl: auth.contactInfo?.website,
+          verificationStatus: 'seed',
         });
       }
     });
@@ -188,8 +203,8 @@ export function findAuthorities(
  * Get authority handles only (for tweet composition)
  */
 export function getAuthorityHandles(
-  lat: number,
-  lng: number,
+  lat: number | undefined,
+  lng: number | undefined,
   address: string,
   category: IssueCategory
 ): string[] {
@@ -201,8 +216,8 @@ export function getAuthorityHandles(
  * Get matched authorities with details
  */
 export function getMatchedAuthoritiesWithDetails(
-  lat: number,
-  lng: number,
+  lat: number | undefined,
+  lng: number | undefined,
   address: string,
   category: IssueCategory
 ): MatchedAuthority[] {

@@ -4,6 +4,9 @@
     "slug": "civicvigilance",
     "scheme": "civicvigilance",
     "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "description": "Report civic issues. Amplify your voice. Hold authorities accountable. CivicVigilance empowers citizens to report potholes, garbage, broken infrastructure and more with photos, GPS tagging, and social media amplification.",
     "orientation": "portrait",
     "icon": "./assets/App Icon/Civic Vigilance (1).png",
@@ -11,24 +14,22 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.civicvigilance.app",
+      "buildNumber": "1",
       "infoPlist": {
         "NSCameraUsageDescription": "CivicVigilance needs camera access to capture civic issues.",
-        "NSLocationWhenInUseUsageDescription": "CivicVigilance uses your location to tag reports accurately."
+        "NSLocationWhenInUseUsageDescription": "CivicVigilance uses your location to tag reports accurately.",
+        "NSPhotoLibraryUsageDescription": "CivicVigilance needs photo access when you choose existing evidence for a report."
       }
     },
     "android": {
       "permissions": [
-        "CAMERA",
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_LOCATION"
+        "android.permission.RECORD_AUDIO"
       ],
       "package": "com.civicvigilance.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/App Icon/Civic Vigilance (1).png",
         "backgroundColor": "#FFFFFF"
@@ -44,15 +45,18 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "CivicVigilance uses your location to tag reports accurately.",
-          "isAndroidForegroundServiceEnabled": true
+          "locationWhenInUsePermission": "CivicVigilance uses your location only while you confirm a report location.",
+          "isAndroidForegroundServiceEnabled": false
         }
-      ]
+      ],
+      "expo-secure-store",
+      "expo-sqlite"
     ],
     "extra": {
       "eas": {
-        "projectId": "dd651fad-16ce-4e9c-ab07-2c5250463d24"
+        "projectId": "d7770c09-896e-4603-8813-2b399051eeef"
       }
-    }
+    },
+    "owner": "civicvigilance2026s-team"
   }
 }

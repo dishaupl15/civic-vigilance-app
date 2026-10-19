@@ -22,7 +22,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import Button from '../../components/ui/Button';
 import { TwitterPostingMethod, CategoryKey } from '../../types';
-import { getAuthorityHandles, getMatchedAuthoritiesWithDetails } from '../../lib/smartAuthorities';
+import { getMatchedAuthoritiesWithDetails } from '../../lib/smartAuthorities';
 import { Colors, Shadows, Typography, BorderRadius } from '../../constants/DesignSystem';
 
 interface Props {
@@ -31,7 +31,7 @@ interface Props {
   description: string;
   category: CategoryKey;
   address: string;
-  coords: { lat: number; lng: number };
+  coords: { lat: number; lng: number } | null;
   privacy: TwitterPostingMethod;
   onSubmit: () => void;
   onBack: () => void;
@@ -67,20 +67,20 @@ export default function Stage4PreviewScreen({
   onEditDetails,
   onEditPrivacy,
 }: Props) {
-  const [authorities, setAuthorities] = useState<string[]>([]);
+  const [authorities, setAuthorities] = useState<ReturnType<typeof getMatchedAuthoritiesWithDetails>>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Load suggested authorities based on location + category (PRD Section 7.3)
   useEffect(() => {
-    const matchedAuthorities = getAuthorityHandles(
-      coords.lat,
-      coords.lng,
+    const matchedAuthorities = getMatchedAuthoritiesWithDetails(
+      coords?.lat,
+      coords?.lng,
       address,
       category
     );
 
     if (__DEV__) console.log('[Preview] Matched authorities:', matchedAuthorities);
-    setAuthorities(matchedAuthorities.length > 0 ? matchedAuthorities : ['@mygovindia']);
+    setAuthorities(matchedAuthorities);
   }, [coords, category, address]);
 
   const handleSubmit = async () => {
@@ -105,12 +105,14 @@ export default function Stage4PreviewScreen({
 
     let tweetText = `${emoji} ${category.replace(/_/g, ' ')} reported on ${dateStr}\n`;
     tweetText += `📍 ${address}\n`;
-    tweetText += `🗺️ GPS: ${coords.lat.toFixed(5)}°N, ${coords.lng.toFixed(5)}°E\n`;
-    tweetText += `Location: https://maps.google.com/?q=${coords.lat},${coords.lng}\n\n`;
+    if (coords) {
+      tweetText += `GPS: ${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}\n`;
+      tweetText += `Location: https://maps.google.com/?q=${coords.lat},${coords.lng}\n\n`;
+    }
 
     // Add authorities
     if (authorities.length > 0) {
-      tweetText += `${authorities.join(' ')}\n\n`;
+      tweetText += `${authorities.map((authority) => authority.handle).join(' ')}\n\n`;
     }
 
     // Add description or title
@@ -205,13 +207,19 @@ export default function Stage4PreviewScreen({
         </View>
 
         <View style={styles.authoritiesList}>
-          {authorities.map((handle, index) => (
-            <View key={index} style={styles.authorityChip}>
+          {authorities.map((authority) => (
+            <View key={authority.handle} style={styles.authorityChip}>
               <Ionicons name="at" size={16} color="#2563EB" />
-              <Text style={styles.authorityText}>{handle.replace('@', '')}</Text>
+              <Text style={styles.authorityText}>{authority.handle.replace('@', '')}</Text>
             </View>
           ))}
         </View>
+
+        <Text style={styles.hintText}>
+          {authorities.length === 0
+            ? 'No reliable authority match was found. Choose an official portal manually after saving.'
+            : 'These are unverified seed suggestions. Confirm the recipient on its official website before sharing.'}
+        </Text>
 
         <Text style={styles.hintText}>
           📍 Based on your location in {address.split(',')[1]?.trim() || 'your area'}

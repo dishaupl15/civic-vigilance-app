@@ -26,6 +26,17 @@ export type UserProfile = Partial<User> & { id: string };
 const PROFILE_KEY = 'demo_profile';
 const PREFS_KEY = 'demo_notification_prefs';
 
+const DEFAULT_NOTIFICATIONS = {
+  nearby: true,
+  comments: true,
+  upvotes: true,
+  replies: true,
+  twitter: false,
+  digest: true,
+  trending: false,
+  similar: true,
+};
+
 export async function loadProfile(userId: string): Promise<UserProfile> {
   if (getBackend() === 'sqlite') {
     const raw = await AsyncStorage.getItem(PROFILE_KEY);
@@ -39,11 +50,65 @@ export async function loadProfile(userId: string): Promise<UserProfile> {
   }
 
   return withRetry(async () => {
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
+    const [profileResult, userResult, preferencesResult, statsResult] = await Promise.all([
+      supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
+      supabase.from('users').select('*').eq('id', userId).maybeSingle(),
+      supabase.from('user_preferences').select('*').eq('user_id', userId).maybeSingle(),
+      supabase.from('user_stats').select('*').eq('user_id', userId).maybeSingle(),
+    ]);
+    const firstError = [profileResult, userResult, preferencesResult, statsResult].find((result) => result.error)?.error;
+    if (firstError) throw firstError;
 
-    if (data) {
-      const userProfile: UserProfile = { ...data, uid: data.id, photoURL: data.avatar_url };
-      return userProfile;
+    const profile = profileResult.data;
+    const user = userResult.data;
+    const preferences = preferencesResult.data;
+    const stats = statsResult.data;
+    if (profile || user) {
+      return {
+        id: userId,
+        uid: userId,
+        email: user?.email,
+        username: profile?.username || user?.username || `Citizen_${userId.slice(0, 8)}`,
+        full_name: profile?.full_name || user?.full_name,
+        displayName: profile?.display_name || user?.display_name,
+        photoURL: profile?.avatar_url || user?.photo_url,
+        bio: profile?.bio || user?.bio,
+        city: profile?.city || user?.city,
+        state: profile?.state || user?.state,
+        anonymousMode: Boolean(profile?.anonymous_mode ?? user?.anonymous_mode),
+        googleConnected: Boolean(user?.google_connected),
+        twitterConnected: Boolean(user?.twitter_connected),
+        twitterHandle: user?.twitter_handle,
+        twitterUserId: user?.twitter_user_id,
+        privacyDefault: user?.privacy_default === 'none' ? 'none' : 'twitter',
+        alwaysAskTwitterMethod: Boolean(user?.always_ask_twitter_method),
+        isVerified: Boolean(user?.is_verified),
+        verificationType: user?.verification_type,
+        stats: {
+          totalPosts: stats?.total_posts || 0,
+          totalUpvotes: stats?.total_upvotes || 0,
+          totalComments: stats?.total_comments || 0,
+          totalShares: stats?.total_shares || 0,
+        },
+        preferences: {
+          notifications: {
+            nearby: preferences?.notify_nearby ?? DEFAULT_NOTIFICATIONS.nearby,
+            comments: preferences?.notify_comments ?? DEFAULT_NOTIFICATIONS.comments,
+            upvotes: preferences?.notify_upvotes ?? DEFAULT_NOTIFICATIONS.upvotes,
+            replies: preferences?.notify_replies ?? DEFAULT_NOTIFICATIONS.replies,
+            twitter: preferences?.notify_twitter ?? DEFAULT_NOTIFICATIONS.twitter,
+            digest: preferences?.notify_digest ?? DEFAULT_NOTIFICATIONS.digest,
+            trending: preferences?.notify_trending ?? DEFAULT_NOTIFICATIONS.trending,
+            similar: preferences?.notify_similar ?? DEFAULT_NOTIFICATIONS.similar,
+          },
+        },
+        privacySettings: {
+          profileVisibility: preferences?.profile_visibility || 'public',
+          showLocation: preferences?.show_location ?? true,
+        },
+        createdAt: new Date(user?.created_at || profile?.created_at || Date.now()),
+        lastLoginAt: new Date(user?.last_login_at || Date.now()),
+      } as UserProfile;
     }
     return { id: userId };
   });
@@ -58,39 +123,44 @@ export async function saveProfile(p: UserProfile) {
   // Supabase backend
   if (!isSupabaseConfigured) throw new Error('Supabase not configured');
 
-  // Prepare payload - mapping camelCase types to snake_case DB columns if needed, 
-  // currently assuming snake_case matches or Supabase JS handles it? 
-  // Actually, db schema is snake_case. Types are camelCase mostly?
-  // Checking types/index.ts: 
-  // "preferences", "privacySettings" -> In DB they might be jsonb columns.
-  // "anonymousMode" -> "anonymous_mode" in DB?
-  // "privacyDefault" -> "privacy_default" in DB?
-  // "twitterConnected" -> "twitter_connected"?
+  const profilePayload: any = { updated_at: new Date().toISOString() };
+  if (p.full_name !== undefined) profilePayload.full_name = p.full_name;
+  if (p.displayName !== undefined) profilePayload.display_name = p.displayName;
+  if (p.photoURL !== undefined) profilePayload.avatar_url = p.photoURL;
+  if (p.bio !== undefined) profilePayload.bio = p.bio;
+  if (p.city !== undefined) profilePayload.city = p.city;
+  if (p.state !== undefined) profilePayload.state = p.state;
+  if (p.anonymousMode !== undefined) profilePayload.anonymous_mode = p.anonymousMode;
 
-  // Let's create a clean valid payload
-  const payload: any = {
-    id: p.id,
-    updated_at: new Date().toISOString(),
-  };
+  const userPayload: any = { updated_at: new Date().toISOString() };
+  if (p.privacyDefault !== undefined) userPayload.privacy_default = p.privacyDefault === 'none' ? 'none' : 'civic_vigilance';
+  if (p.alwaysAskTwitterMethod !== undefined) userPayload.always_ask_twitter_method = p.alwaysAskTwitterMethod;
 
-  if (p.full_name !== undefined) payload.full_name = p.full_name;
-  if (p.photoURL !== undefined) payload.avatar_url = p.photoURL; // Map photoURL to avatar_url DB column
-
-  // Settings fields
-  if (p.anonymousMode !== undefined) payload.anonymous_mode = p.anonymousMode;
-  if (p.privacyDefault !== undefined) payload.privacy_default = p.privacyDefault;
-  if (p.twitterConnected !== undefined) payload.twitter_connected = p.twitterConnected;
-  if (p.preferences !== undefined) payload.preferences = p.preferences;
-  if (p.privacySettings !== undefined) payload.privacy_settings = p.privacySettings;
-  if (p.stats !== undefined) payload.stats = p.stats;
-
-  const { data, error } = await supabase.from('profiles').upsert(payload).select('*').single();
-
-  if (error) {
-    console.error('Error saving profile:', error);
-    throw error;
+  const preferencePayload: any = { updated_at: new Date().toISOString() };
+  const notifications = p.preferences?.notifications;
+  if (notifications) {
+    preferencePayload.notify_nearby = notifications.nearby;
+    preferencePayload.notify_comments = notifications.comments;
+    preferencePayload.notify_upvotes = notifications.upvotes;
+    preferencePayload.notify_replies = notifications.replies;
+    preferencePayload.notify_twitter = notifications.twitter;
+    preferencePayload.notify_digest = notifications.digest;
+    preferencePayload.notify_trending = notifications.trending;
+    preferencePayload.notify_similar = notifications.similar;
   }
-  return { ...data, uid: data.id, photoURL: data.avatar_url } as unknown as UserProfile;
+  if (p.privacySettings) {
+    preferencePayload.profile_visibility = p.privacySettings.profileVisibility;
+    preferencePayload.show_location = p.privacySettings.showLocation;
+  }
+
+  const operations = [];
+  if (Object.keys(profilePayload).length > 1) operations.push(supabase.from('profiles').update(profilePayload).eq('id', p.id));
+  if (Object.keys(userPayload).length > 1) operations.push(supabase.from('users').update(userPayload).eq('id', p.id));
+  if (Object.keys(preferencePayload).length > 1) operations.push(supabase.from('user_preferences').update(preferencePayload).eq('user_id', p.id));
+  const results = await Promise.all(operations);
+  const error = results.find((result: any) => result.error)?.error;
+  if (error) throw error;
+  return loadProfile(p.id);
 }
 
 export async function pickAvatar(): Promise<string | null> {

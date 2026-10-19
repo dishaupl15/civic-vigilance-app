@@ -44,8 +44,8 @@ class MockDatabase {
       const id = this.nextId.users++;
       this.data.users.push({ id, email, password_hash, created_at });
     } else if (lowerQuery.includes('insert into profiles') || lowerQuery.includes('insert or replace into profiles')) {
-      const [user_id, full_name, created_at] = params || [];
-      this.data.profiles.push({ user_id, full_name, created_at });
+      const [user_id, username, full_name, created_at] = params || [];
+      this.data.profiles.push({ user_id, username, full_name, created_at });
     }
   }
 

@@ -30,7 +30,7 @@ export async function ensureSessionUserId(): Promise<number> {
   db.withTransactionSync?.(() => {
     db.runSync?.('INSERT INTO users(email, password_hash, created_at) VALUES (?,?,?)', [email, hash, now]);
     const id = (db.getFirstSync?.('SELECT last_insert_rowid() as id') as any)?.id as number;
-    db.runSync?.('INSERT OR REPLACE INTO profiles(user_id, full_name, created_at) VALUES (?,?,?)', [id, 'Anonymous', now]);
+    db.runSync?.('INSERT OR REPLACE INTO profiles(user_id, username, full_name, created_at) VALUES (?,?,?,?)', [id, `local_${id}`, 'Anonymous', now]);
     AsyncStorage.setItem(SESSION_KEY, String(id));
   });
   const out: any = db.getFirstSync?.('SELECT id FROM users WHERE email=?', [email]);
@@ -45,7 +45,7 @@ export async function signUpLocal(email: string, password: string, fullName?: st
     db.withTransactionSync?.(() => {
       db.runSync?.(`INSERT INTO users(email, password_hash, created_at) VALUES (?,?,?);`, [email, hash, now]);
       const id = (db.getFirstSync?.(`SELECT id FROM users WHERE email=?;`, [email]) as any)?.id as number;
-      db.runSync?.(`INSERT OR REPLACE INTO profiles(user_id, full_name, created_at) VALUES (?,?,?);`, [id, fullName || null, now]);
+      db.runSync?.(`INSERT OR REPLACE INTO profiles(user_id, username, full_name, created_at) VALUES (?,?,?,?);`, [id, `local_${id}`, fullName || null, now]);
     });
     const id = (getDB().getFirstSync?.(`SELECT id FROM users WHERE email=?;`, [email]) as any)?.id as number;
     await AsyncStorage.setItem(SESSION_KEY, String(id));

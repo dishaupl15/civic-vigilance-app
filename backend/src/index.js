@@ -12,15 +12,19 @@ if (fs.existsSync(envPath)) {
     }
 }
 
-const express = require('express');
-const routes = require('./routes');
+const app = require('./app');
+const { parsePort, validateProductionEnv } = require('./config');
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(express.json());
-app.use('/api', routes);
-
-app.listen(PORT, () => {
+validateProductionEnv();
+const PORT = parsePort();
+const server = app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
 });
+
+function shutdown(signal) {
+    console.log(`${signal} received; stopping HTTP server.`);
+    server.close((error) => process.exit(error ? 1 : 0));
+    setTimeout(() => process.exit(1), 10_000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

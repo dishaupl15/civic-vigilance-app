@@ -4,7 +4,16 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const anon = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-export const isSupabaseConfigured = Boolean(url && anon);
+function hasValidSupabaseConfiguration() {
+  if (!url || !anon || /YOUR_|your_/i.test(`${url}${anon}`)) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && parsed.hostname.endsWith('.supabase.co') && anon.length >= 20;
+  } catch {
+    return false;
+  }
+}
+export const isSupabaseConfigured = hasValidSupabaseConfiguration();
 
 let supabase: SupabaseClient | any;
 
@@ -21,7 +30,7 @@ if (isSupabaseConfigured) {
   // Prevent crash when env is missing so UI can boot.
   // Any call into the client will behave as a no‑op with empty data.
   console.warn(
-    'Supabase env not set. Set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY in .env to enable auth and data.'
+    'Supabase env is missing or invalid. Set a real EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY in .env.'
   );
   const ok = <T>(data: T) => ({ data, error: null as any });
   const noop = async () => ({ data: null as any, error: { message: 'Supabase not configured' } });

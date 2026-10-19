@@ -26,6 +26,7 @@ interface Props {
   issueId: string;
   privacy: TwitterPostingMethod;
   tweetUrl?: string;
+  externalComposerOpened?: boolean;
   onViewPost: () => void;
   onShareMore: () => void;
   onDone: () => void;
@@ -35,6 +36,7 @@ export default function Stage5SuccessScreen({
   issueId,
   privacy,
   tweetUrl,
+  externalComposerOpened,
   onViewPost,
   onShareMore,
   onDone,
@@ -75,21 +77,23 @@ export default function Stage5SuccessScreen({
 
       {/* Success Message */}
       <Animated.View style={[styles.content, { opacity: fadeAnim }]}>
-        <Text style={styles.title}>Issue Reported!</Text>
-        <Text style={styles.subtitle}>Your voice is now live!</Text>
+        <Text style={styles.title}>{privacy === 'none' ? 'Private Report Saved' : 'Issue Reported'}</Text>
+        <Text style={styles.subtitle}>{privacy === 'none' ? 'Only you can access this report.' : 'Your report is now in the community feed.'}</Text>
 
         {/* What Happened Summary */}
         <View style={styles.summaryBox}>
           {privacy === 'twitter' && (
             <View style={styles.summaryRow}>
               <Ionicons name="logo-twitter" size={20} color="#1DA1F2" />
-              <Text style={styles.summaryText}>Shared on X/Twitter</Text>
+              <Text style={styles.summaryText}>
+                {externalComposerOpened ? 'X/Twitter composer opened — publication is not confirmed' : 'Not published to X/Twitter'}
+              </Text>
             </View>
           )}
 
           <View style={styles.summaryRow}>
-            <Ionicons name="people" size={20} color="#2563EB" />
-            <Text style={styles.summaryText}>Visible to your community</Text>
+            <Ionicons name={privacy === 'none' ? 'lock-closed' : 'people'} size={20} color="#2563EB" />
+            <Text style={styles.summaryText}>{privacy === 'none' ? 'Not visible in the public feed' : 'Visible to your community'}</Text>
           </View>
 
           <View style={styles.summaryRow}>

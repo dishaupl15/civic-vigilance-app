@@ -14,6 +14,9 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from '
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { User as ProfileUser } from '../types';
 import * as Crypto from 'expo-crypto';
+import { getBackend } from '../lib/backend';
+import { currentUserLocal, initAuth, signInLocal, signOutLocal, signUpLocal } from '../lib/sqliteAuth';
+import { loadProfile } from '../lib/profile';
 
 // User Session type (Auth User)
 interface AuthUser {
@@ -42,6 +45,14 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function authErrorMessage(error: any, fallback: string) {
+  const message = String(error?.message || '');
+  if (/failed to fetch|network request failed|name_not_resolved|load failed/i.test(message)) {
+    return 'Cannot reach the configured authentication server. Check the Supabase project URL or use local development mode.';
+  }
+  return message || fallback;
+}
+
 /**
  * AuthProvider Component
  *
@@ -62,17 +73,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Helper to fetch profile
   const fetchProfile = async (userId: string) => {
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
-
-      if (error) {
-        console.error('[Auth] Error fetching profile:', error);
-        return null;
-      }
-      return data as ProfileUser;
+      return await loadProfile(userId) as ProfileUser;
     } catch (e) {
       console.error('[Auth] Exception fetching profile:', e);
       return null;
@@ -80,6 +81,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
+    if (getBackend() === 'sqlite') {
+      let active = true;
+      void (async () => {
+        await initAuth();
+        const localUser = await currentUserLocal();
+        if (active && localUser) {
+          setSession({ user: { id: String(localUser.id), email: localUser.email } });
+          setProfile({ id: String(localUser.id), username: localUser.email.split('@')[0], full_name: localUser.email.split('@')[0] } as any);
+        }
+        if (active) setIsLoading(false);
+      })();
+      return () => { active = false; };
+    }
+
     // Check if Supabase is configured
     if (!isSupabaseConfigured) {
       console.error('Supabase is not configured. Please check your .env file.');
@@ -223,6 +238,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return undefined;
       }
 
+      if (getBackend() === 'sqlite') {
+        const result = await signInLocal(email.trim().toLowerCase(), password);
+        if (result.error || !result.user) return { error: result.error || 'Failed to sign in', code: 'auth/local-error' };
+        setSession({ user: { id: String(result.user.id), email: result.user.email } });
+        setProfile({ id: String(result.user.id), username: result.user.email.split('@')[0], full_name: result.user.email.split('@')[0] } as any);
+        return undefined;
+      }
+
       if (!isSupabaseConfigured) {
         return { error: 'Supabase Auth not initialized', code: 'auth/not-initialized' };
       }
@@ -242,7 +265,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (error: any) {
         console.error('[Auth] Sign in error:', error);
         return {
-          error: error?.message || 'Failed to sign in',
+          error: authErrorMessage(error, 'Failed to sign in'),
           code: 'auth/unknown-error',
         };
       }
@@ -252,10 +275,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
      * Sign up with email and password
      *
      * @param email - User's email address
-     * @param password - User's password (min 6 characters)
+     * @param password - User's password (minimum 8 characters)
      * @returns Error object if sign up fails, undefined if successful
      */
     signUp: async (email: string, password: string) => {
+      if (getBackend() === 'sqlite') {
+        const result = await signUpLocal(email.trim().toLowerCase(), password, email.split('@')[0]);
+        if (result.error || !result.user) return { error: result.error || 'Failed to create local account', code: 'auth/local-error' };
+        const localSession = { user: { id: String(result.user.id), email: result.user.email } };
+        setSession(localSession);
+        setProfile({ id: String(result.user.id), username: result.user.email.split('@')[0], full_name: result.user.email.split('@')[0] } as any);
+        return { data: { session: localSession } };
+      }
+
       if (!isSupabaseConfigured) {
         return { error: 'Supabase Auth not initialized', code: 'auth/not-initialized' };
       }
@@ -276,7 +308,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (error: any) {
         console.error('[Auth] Sign up error:', error);
         return {
-          error: error?.message || 'Failed to sign up',
+          error: authErrorMessage(error, 'Failed to sign up'),
           code: 'auth/unknown-error',
         };
       }
@@ -307,7 +339,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (error: any) {
         console.error('[Auth] Reset password error:', error);
         return {
-          error: error?.message || 'Failed to send reset email',
+          error: authErrorMessage(error, 'Failed to send reset email'),
           code: 'auth/unknown-error',
         };
       }
@@ -317,6 +349,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
      * Sign out current user
      */
     signOut: async () => {
+      if (getBackend() === 'sqlite') {
+        await signOutLocal();
+        setSession(null);
+        setProfile(null);
+        return;
+      }
       if (!isSupabaseConfigured) {
         console.error('[Auth] Supabase Auth not initialized');
         return;

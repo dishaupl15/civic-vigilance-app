@@ -5,12 +5,21 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "test": "jest"
+    "test": "jest",
+    "db:start": "npx --yes supabase@2.121.0 start",
+    "db:stop": "npx --yes supabase@2.121.0 stop",
+    "db:reset": "npx --yes supabase@2.121.0 db reset --local --no-seed",
+    "db:lint": "npx --yes supabase@2.121.0 db lint --local --level warning",
+    "db:push:dry": "npx --yes supabase@2.121.0 db push --linked --dry-run",
+    "db:push": "npx --yes supabase@2.121.0 db push --linked",
+    "check:env": "node scripts/validate-production-env.js",
+    "verify:production": "npm test -- --runInBand && npm run check:env"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "dotenv": "^16.4.5",
     "express": "^4.17.1"
   },
   "devDependencies": {

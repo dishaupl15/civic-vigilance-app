@@ -5,6 +5,8 @@ import { Issue } from '../types';
 import { createIssueSqlite, listIssues as listIssuesSqlite, ensureSeedIssues } from '../lib/sqliteIssues';
 import { ensureSessionUserId } from '../lib/sqliteAuth';
 import { useAuth } from './useAuth';
+import { encodeGeohash } from '../lib/geohash';
+import { resolvePhotoUrls } from '../lib/storage';
 
 type SortMode = 'trending' | 'newest' | 'nearby';
 
@@ -108,7 +110,7 @@ export function useIssues(sort: SortMode, coords?: { lat: number; lng: number })
         const list = listIssuesSqlite(sort);
         setData(list as any);
       } else if (getBackend() === 'supabase' && isSupabaseConfigured) {
-        let query = supabase.from('reports').select('*'); // Updated to 'reports' table per schema v2
+        let query = supabase.from('issues').select('*');
 
         if (sort === 'newest') {
           query = query.order('created_at', { ascending: false });
@@ -123,7 +125,13 @@ export function useIssues(sort: SortMode, coords?: { lat: number; lng: number })
         }
 
         const { data, error } = await query.limit(100);
-        if (!error && data) setData(data as any);
+        if (!error && data) {
+          const issuesWithDisplayPhotos = await Promise.all(data.map(async (issue: any) => ({
+            ...issue,
+            photos: await resolvePhotoUrls(Array.isArray(issue.photos) ? issue.photos : []),
+          })));
+          setData(issuesWithDisplayPhotos as any);
+        }
       }
 
       setLoading(false);
@@ -144,13 +152,19 @@ function sanitizeInput(input: string): string {
 }
 
 export async function createIssue(payload: {
+  client_request_id: string;
+  user_id?: string;
   title: string;
   description: string;
   category: string;
-  image_url?: string;
+  photos: string[];
   lat?: number;
   lng?: number;
   address?: string;
+  location_accuracy_m?: number;
+  location_source: 'gps' | 'manual';
+  location_confirmed: boolean;
+  privacy: 'twitter' | 'none';
 }) {
   // Input validation
   if (!payload.title || payload.title.trim().length === 0) {
@@ -168,22 +182,68 @@ export async function createIssue(payload: {
   if (!payload.category) {
     throw new Error('Category is required');
   }
+  if (!payload.client_request_id) throw new Error('Missing submission identifier');
+  if (!payload.user_id) throw new Error('You must be signed in to submit a report');
+  if (!Array.isArray(payload.photos) || payload.photos.length < 1 || payload.photos.length > 3) {
+    throw new Error('One to three uploaded photos are required');
+  }
+  if (!payload.address?.trim() || !payload.location_confirmed) throw new Error('A confirmed location is required');
+  const hasCoords = typeof payload.lat === 'number' && typeof payload.lng === 'number';
+  if (hasCoords && (payload.lat! < -90 || payload.lat! > 90 || payload.lng! < -180 || payload.lng! > 180)) {
+    throw new Error('Coordinates are outside valid ranges');
+  }
 
   // Sanitize user-generated text content
   const sanitizedPayload = {
     ...payload,
     title: sanitizeInput(payload.title.trim()),
     description: sanitizeInput(payload.description.trim()),
-    address: payload.address ? sanitizeInput(payload.address) : payload.address,
+    address: sanitizeInput(payload.address),
   };
 
   if (getBackend() === 'sqlite') {
     const localUserId = await ensureSessionUserId();
-    return await (createIssueSqlite({ user_id: localUserId, ...sanitizedPayload }) as any);
+    return await (createIssueSqlite({
+      user_id: localUserId,
+      title: sanitizedPayload.title,
+      description: sanitizedPayload.description,
+      category: sanitizedPayload.category,
+      image_url: sanitizedPayload.photos[0],
+      lat: sanitizedPayload.lat,
+      lng: sanitizedPayload.lng,
+      address: sanitizedPayload.address,
+    }) as any);
   }
 
-  // Supabase backend
-  const { data, error } = await supabase.from('issues').insert(sanitizedPayload).select('*').single();
+  const { data: existing } = await supabase
+    .from('issues')
+    .select('*')
+    .eq('client_request_id', sanitizedPayload.client_request_id)
+    .eq('user_id', sanitizedPayload.user_id)
+    .single();
+  if (existing) return existing;
+
+  const location = hasCoords ? `POINT(${sanitizedPayload.lng} ${sanitizedPayload.lat})` : null;
+  const geohash = hasCoords ? encodeGeohash(sanitizedPayload.lat!, sanitizedPayload.lng!, 8) : '';
+  const dbPayload = {
+    client_request_id: sanitizedPayload.client_request_id,
+    user_id: sanitizedPayload.user_id,
+    title: sanitizedPayload.title,
+    description: sanitizedPayload.description,
+    category: sanitizedPayload.category,
+    photos: sanitizedPayload.photos,
+    location,
+    address: sanitizedPayload.address,
+    geohash,
+    location_accuracy_m: sanitizedPayload.location_accuracy_m ?? null,
+    location_source: sanitizedPayload.location_source,
+    location_confirmed: sanitizedPayload.location_confirmed,
+    privacy: sanitizedPayload.privacy === 'twitter' ? 'personal' : 'none',
+    visibility: sanitizedPayload.privacy === 'none' ? 'private' : 'public',
+    anonymous_username: 'Anonymous Citizen',
+    status: 'pending',
+  };
+  const { data, error } = await supabase.from('issues').insert(dbPayload).select('*').single();
   if (error) throw error;
   return data;
 }

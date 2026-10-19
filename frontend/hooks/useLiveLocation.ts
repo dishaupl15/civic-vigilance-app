@@ -1,49 +1,72 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Location from 'expo-location';
 import { reverseGeocode } from '../lib/location';
+import { isValidCoordinate } from '../lib/reportValidation';
+
+export type LiveCoordinates = {
+  lat: number;
+  lng: number;
+  accuracy?: number;
+  capturedAt: number;
+};
 
 export function useLiveLocation() {
-  const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy?: number } | null>(null);
+  const [coords, setCoords] = useState<LiveCoordinates | null>(null);
   const [address, setAddress] = useState('');
-  const [permissionStatus, setPermissionStatus] = useState<Location.PermissionStatus | 'unavailable'>('unavailable');
-  const [hasInitialAddress, setHasInitialAddress] = useState(false);
-  const lastGeocodeCoords = useRef<{ lat: number; lng: number } | null>(null);
+  const [permissionStatus, setPermissionStatus] = useState<Location.PermissionStatus | 'undetermined'>('undetermined');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const watchSub = useRef<Location.LocationSubscription | null>(null);
+  const lastGeocode = useRef<{ lat: number; lng: number } | null>(null);
 
-  // Helper to calculate distance in meters (Haversine formula)
-  const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-    const R = 6371e3; // Earth radius in meters
-    const p1 = lat1 * Math.PI / 180;
-    const p2 = lat2 * Math.PI / 180;
-    const dp = (lat2 - lat1) * Math.PI / 180;
-    const dl = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dp / 2) * Math.sin(dp / 2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  };
+  const updateLocation = useCallback(async (loc: Location.LocationObject) => {
+    const lat = loc.coords.latitude;
+    const lng = loc.coords.longitude;
+    if (!isValidCoordinate(lat, lng)) {
+      setError('The device returned invalid coordinates. Enter the location manually.');
+      return;
+    }
 
-  useEffect(() => {
-    (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      setPermissionStatus(status);
-      if (status !== 'granted') return;
-      watchSub.current = await Location.watchPositionAsync({ accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 5 }, async (loc) => {
-        const c = { lat: loc.coords.latitude, lng: loc.coords.longitude, accuracy: loc.coords.accuracy ?? undefined };
-        setCoords(c);
+    setCoords({ lat, lng, accuracy: loc.coords.accuracy ?? undefined, capturedAt: loc.timestamp });
+    const last = lastGeocode.current;
+    const movedEnough = !last || Math.abs(last.lat - lat) + Math.abs(last.lng - lng) > 0.00025;
+    if (movedEnough) {
+      lastGeocode.current = { lat, lng };
+      const resolved = await reverseGeocode(lat, lng);
+      if (resolved) setAddress(resolved);
+    }
+  }, []);
 
-        // Only reverse geocode if first time OR moved more than 25 meters to avoid spamming the API
-        const last = lastGeocodeCoords.current;
-        if (!hasInitialAddress || !last || getDistance(last.lat, last.lng, c.lat, c.lng) > 25) {
-          lastGeocodeCoords.current = c;
-          const reverseRes = await reverseGeocode(c.lat, c.lng);
-          setAddress(reverseRes);
-          if (!hasInitialAddress) setHasInitialAddress(true);
-        }
-      });
-    })();
-    return () => { watchSub.current?.remove(); };
-  }, [hasInitialAddress]);
+  const requestLocation = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      setPermissionStatus(permission.status);
+      if (permission.status !== 'granted') {
+        setError(permission.canAskAgain
+          ? 'Location permission was not granted. You can enter an address manually.'
+          : 'Location permission is blocked. Enable it in settings or enter an address manually.');
+        return false;
+      }
 
-  return { coords, address, accuracy: coords?.accuracy, permissionStatus };
+      const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      await updateLocation(current);
+      watchSub.current?.remove();
+      watchSub.current = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
+        (next) => void updateLocation(next)
+      );
+      return true;
+    } catch (cause: any) {
+      setError(cause?.message || 'Unable to determine your location. Enter it manually.');
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }, [updateLocation]);
+
+  useEffect(() => () => watchSub.current?.remove(), []);
+
+  return { coords, address, accuracy: coords?.accuracy, permissionStatus, loading, error, requestLocation };
 }
-
