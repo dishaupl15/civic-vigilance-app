@@ -1,9 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const { analyzeImage } = require('../ai-analysis');
+const { generateReportContent, validateReportInput } = require('../report-content');
 const { deleteAccount, exportAccountData, requireSupabaseUser } = require('../supabase-admin');
 
 const analysisAttempts = new Map();
+const contentAttempts = new Map();
 let lastRateLimitSweep = 0;
 function analysisRateLimit(req, res, next) {
     const key = req.authUser?.id || req.ip || 'unknown';
@@ -21,6 +23,22 @@ function analysisRateLimit(req, res, next) {
     next();
 }
 
+function reportContentRateLimit(req, res, next) {
+    const key = req.authUser?.id || req.ip || 'unknown';
+    const now = Date.now();
+    if (now - lastRateLimitSweep >= 60_000 || contentAttempts.size > 10_000) {
+        for (const [storedKey, attempts] of contentAttempts) {
+            if (!attempts.some((time) => now - time < 60_000)) contentAttempts.delete(storedKey);
+        }
+        lastRateLimitSweep = now;
+    }
+    const recent = (contentAttempts.get(key) || []).filter((time) => now - time < 60_000);
+    if (recent.length >= 5) return res.status(429).json({ error: 'Too many AI writing requests. Try again shortly.' });
+    recent.push(now);
+    contentAttempts.set(key, recent);
+    next();
+}
+
 router.get('/', (_req, res) => {
     res.json({ service: 'civic-vigilance-api', status: 'ok' });
 });
@@ -29,6 +47,13 @@ router.get('/health', (_req, res) => res.json({ status: 'ok', service: 'civic-vi
 function requirePrivacyAcknowledgement(req, res, next) {
     if (req.body?.privacy_notice_accepted !== true) {
         return res.status(400).json({ error: 'Accept the image-analysis privacy notice before continuing.' });
+    }
+    next();
+}
+
+function requireReportContentPrivacyAcknowledgement(req, res, next) {
+    if (req.body?.privacy_notice_accepted !== true) {
+        return res.status(400).json({ error: 'Accept the AI writing privacy notice before continuing.' });
     }
     next();
 }
@@ -76,6 +101,26 @@ router.post('/analyze-image', requireSupabaseUser, analysisRateLimit, requirePri
         }
     } catch (error) {
         if (error.name === 'AbortError') error.message = 'Image analysis timed out. Continue manually or retry.';
+        next(error);
+    }
+});
+
+router.post('/generate-report-content', requireSupabaseUser, reportContentRateLimit, requireReportContentPrivacyAcknowledgement, async (req, res, next) => {
+    try {
+        const report = validateReportInput(req.body?.report);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 20_000);
+        try {
+            const content = await generateReportContent({ input: report, signal: controller.signal });
+            res.json({ content });
+        } finally {
+            clearTimeout(timer);
+        }
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            error.message = 'AI writing timed out. Continue manually or retry.';
+            error.status = 503;
+        }
         next(error);
     }
 });

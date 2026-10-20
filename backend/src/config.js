@@ -75,6 +75,12 @@ function validateProductionEnv() {
     throw new Error('AI_VISION_ENDPOINT and AI_VISION_API_KEY must either both be set or both be omitted.');
   }
   if (hasAiEndpoint) parseHttpsUrl(process.env.AI_VISION_ENDPOINT, 'AI_VISION_ENDPOINT');
+  const hasTextEndpoint = !isPlaceholder(process.env.AI_TEXT_ENDPOINT);
+  const hasTextKey = !isPlaceholder(process.env.AI_TEXT_API_KEY);
+  if (hasTextEndpoint !== hasTextKey) {
+    throw new Error('AI_TEXT_ENDPOINT and AI_TEXT_API_KEY must either both be set or both be omitted.');
+  }
+  if (hasTextEndpoint) parseHttpsUrl(process.env.AI_TEXT_ENDPOINT, 'AI_TEXT_ENDPOINT');
 }
 
 module.exports = {
