@@ -459,19 +459,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        const { error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
+        const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
 
         if (error) {
           const errorMessage = String(error.message || '');
           if (/email not confirmed/i.test(errorMessage)) {
             return {
-              error: 'Please verify your email using the confirmation link before signing in.',
+              error: 'Sign-in unsuccessful. Check your email and password, then try again.',
               code: error.status?.toString() || 'auth/email-not-confirmed',
             };
           }
           return {
             error: errorMessage || 'Failed to sign in',
             code: error.status?.toString() || 'auth/unknown-error',
+          };
+        }
+
+        if (!data?.session?.user?.id) {
+          return {
+            error: 'Sign-in did not establish an active session. Please try again.',
+            code: 'auth/no-session',
           };
         }
 

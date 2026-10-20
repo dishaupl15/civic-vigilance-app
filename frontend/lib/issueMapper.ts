@@ -112,6 +112,9 @@ function parseDatabaseIssue(rowValue: unknown): IssueWithUserData {
   const coordinates = pointCoordinates(row.location);
   const address = optionalString(row.address);
   const geohash = optionalString(row.geohash);
+  const locationSource = row.location_source === 'gps' || row.location_source === 'manual'
+    ? row.location_source
+    : undefined;
 
   return {
     id: requiredString(row, 'id'),
@@ -123,6 +126,9 @@ function parseDatabaseIssue(rowValue: unknown): IssueWithUserData {
     location: address || geohash || coordinates.lat !== undefined || coordinates.lng !== undefined
       ? { ...coordinates, address, geohash }
       : undefined,
+    locationAccuracyM: optionalNumber(row.location_accuracy_m),
+    locationSource,
+    locationConfirmed: typeof row.location_confirmed === 'boolean' ? row.location_confirmed : undefined,
     address,
     ...coordinates,
     privacy: mapPrivacy(row.privacy),

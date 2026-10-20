@@ -1,13 +1,18 @@
-import { fireEvent, render } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import Stage2DetailsScreen from '../screens/reporting/Stage2DetailsScreen';
 import { getAuthorityRecommendations } from '../lib/authorityRecommendations';
 
 jest.mock('../lib/authorityRecommendations', () => ({
-  getAuthorityRecommendations: jest.fn(() => ({
+  emptyAuthorityRecommendations: jest.fn(() => ({
     accounts: [],
     departments: ['Municipal public works or roads department'],
     unverifiedDirectoryMatches: false,
   })),
+  getAuthorityRecommendations: jest.fn().mockResolvedValue({
+    accounts: [],
+    departments: ['Municipal public works or roads department'],
+    unverifiedDirectoryMatches: false,
+  }),
 }));
 
 const gpsCoords = { lat: 19.076, lng: 72.8777 };
@@ -99,9 +104,10 @@ describe('Stage2DetailsScreen location confirmation', () => {
     }));
   });
 
-  it('lets the user select and remove verified authority suggestions', () => {
-    jest.mocked(getAuthorityRecommendations).mockReturnValue({
+  it('lets the user select and remove verified authority suggestions', async () => {
+    jest.mocked(getAuthorityRecommendations).mockResolvedValue({
       accounts: [{
+        id: 'authority-1',
         name: 'Verified Municipal Corporation',
         handle: '@VerifiedCivic',
         confidence: 0.8,
@@ -122,6 +128,7 @@ describe('Stage2DetailsScreen location confirmation', () => {
         onBack={jest.fn()}
       />
     );
+    await waitFor(() => expect(screen.getByLabelText('Select Verified Municipal Corporation account @VerifiedCivic')).toBeTruthy());
     const suggestion = screen.getByLabelText('Select Verified Municipal Corporation account @VerifiedCivic');
     fireEvent.press(suggestion);
     expect(suggestion.props.accessibilityState).toEqual({ checked: true });
@@ -133,5 +140,77 @@ describe('Stage2DetailsScreen location confirmation', () => {
     expect(onContinue).toHaveBeenCalledWith(expect.objectContaining({
       selectedAuthorityHandles: [],
     }));
+  });
+
+  it('does not carry selected authority suggestions across a location change', async () => {
+    jest.mocked(getAuthorityRecommendations)
+      .mockResolvedValueOnce({
+        accounts: [{
+          id: 'authority-1',
+          name: 'Verified Municipal Corporation',
+          handle: '@VerifiedCivic',
+          confidence: 0.8,
+          matchReason: 'City + Category match',
+          verificationStatus: 'verified',
+        }],
+        departments: ['Municipal public works or roads department'],
+        unverifiedDirectoryMatches: false,
+      })
+      .mockImplementationOnce(() => new Promise(() => undefined));
+    const onContinue = jest.fn();
+    const screen = render(
+      <Stage2DetailsScreen
+        photos={['file:///evidence.jpg']}
+        initialAddress="Mumbai, Maharashtra"
+        coords={gpsCoords}
+        onContinue={onContinue}
+        onBack={jest.fn()}
+      />
+    );
+    const suggestion = await screen.findByLabelText('Select Verified Municipal Corporation account @VerifiedCivic');
+    fireEvent.press(suggestion);
+    fillRequiredFields(screen);
+    fireEvent.press(screen.getByText('Edit'));
+    fireEvent.changeText(screen.getByPlaceholderText('Street, landmark, city and state'), 'Pune, Maharashtra');
+    fireEvent.press(screen.getByText('Confirm & Continue'));
+
+    expect(onContinue).toHaveBeenCalledWith(expect.objectContaining({
+      selectedAuthorityHandles: [],
+      authoritySuggestions: [],
+    }));
+  });
+
+  it('normalizes the manually confirmed address before continuing', () => {
+    const onContinue = jest.fn();
+    const screen = render(
+      <Stage2DetailsScreen
+        photos={['file:///evidence.jpg']}
+        initialAddress=""
+        coords={null}
+        onContinue={onContinue}
+        onBack={jest.fn()}
+      />
+    );
+    fireEvent.changeText(screen.getByPlaceholderText('Street, landmark, city and state'), '  Central\n  Mumbai ');
+    fillRequiredFields(screen);
+    fireEvent.press(screen.getByText('Confirm & Continue'));
+    expect(onContinue).toHaveBeenCalledWith(expect.objectContaining({ address: 'Central Mumbai' }));
+  });
+
+  it('does not continue with a location address that exceeds the database limit', () => {
+    const onContinue = jest.fn();
+    const screen = render(
+      <Stage2DetailsScreen
+        photos={['file:///evidence.jpg']}
+        initialAddress=""
+        coords={null}
+        onContinue={onContinue}
+        onBack={jest.fn()}
+      />
+    );
+    fireEvent.changeText(screen.getByPlaceholderText('Street, landmark, city and state'), 'x'.repeat(301));
+    fillRequiredFields(screen);
+    fireEvent.press(screen.getByText('Confirm & Continue'));
+    expect(onContinue).not.toHaveBeenCalled();
   });
 });

@@ -41,19 +41,11 @@ async function testConfiguration() {
     }
   );
 
-  // Test 3: Twitter configuration
-  const twitterClientId = process.env.EXPO_PUBLIC_TWITTER_CLIENT_ID;
-  const twitterConfigured = twitterClientId && twitterClientId !== 'your_oauth_client_id';
+  // X OAuth configuration is server-side and cannot be validated by the app.
   log(
-    'Twitter OAuth Configuration',
-    twitterConfigured ? 'PASS' : 'WARN',
-    twitterConfigured
-      ? 'Twitter OAuth client ID is configured'
-      : 'Twitter OAuth client ID is not configured (using placeholder)',
-    {
-      clientId: twitterConfigured ? 'SET' : 'PLACEHOLDER',
-      redirectUri: process.env.EXPO_PUBLIC_TWITTER_REDIRECT_URI,
-    }
+    'X OAuth Configuration',
+    'SKIP',
+    'X OAuth credentials are server-side; use backend tests and the hosting configuration checklist',
   );
 
   // Test 4: Google Maps API
@@ -211,42 +203,12 @@ async function testAuthenticationFlow() {
 
 async function testTwitterIntegration() {
   console.log('\n=== Twitter Integration Tests ===\n');
-
-  // Test 1: Twitter configuration
-  const twitterClientId = process.env.EXPO_PUBLIC_TWITTER_CLIENT_ID;
-  const twitterConfigured = twitterClientId && twitterClientId !== 'your_oauth_client_id';
-
-  if (!twitterConfigured) {
-    log('Twitter Integration', 'SKIP', 'Twitter OAuth is not configured, skipping Twitter tests');
-    return false;
-  }
-
-  log('Twitter OAuth Setup', 'PASS', 'Twitter OAuth credentials are configured', {
-    redirectUri: process.env.EXPO_PUBLIC_TWITTER_REDIRECT_URI,
-    handle: process.env.EXPO_PUBLIC_CIVIC_VIGILANCE_TWITTER_HANDLE,
-  });
-
-  // Test 2: API URL for Cloud Functions
-  const apiUrl = process.env.EXPO_PUBLIC_API_URL;
-  const apiConfigured = apiUrl && !apiUrl.includes('your-project');
-
   log(
-    'Twitter Cloud Functions',
-    apiConfigured ? 'PASS' : 'WARN',
-    apiConfigured
-      ? 'Cloud Functions API URL is configured for Twitter operations'
-      : 'Cloud Functions API URL needs to be configured for Twitter posting',
-    {
-      expectedEndpoints: [
-        '/postTweetFromCivicAccount',
-        '/postTweetFromUserAccount',
-        '/exchangeTwitterCode',
-        '/disconnectTwitter',
-      ],
-    }
+    'X Account Linking',
+    'SKIP',
+    'Live X authorization is not run by this frontend diagnostic; verify using the backend OAuth tests and configured X Developer Portal',
   );
-
-  return twitterConfigured && apiConfigured;
+  return false;
 }
 
 async function printSummary() {

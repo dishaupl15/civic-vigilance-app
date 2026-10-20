@@ -156,6 +156,7 @@ async function exportAccountData(userId) {
 module.exports = {
   UUID_PATTERN,
   adminRequest,
+  assertUserId,
   deleteAccount,
   exportAccountData,
   purgeStorageFolder,

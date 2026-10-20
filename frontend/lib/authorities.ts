@@ -62,6 +62,8 @@ function parseAuthority(value: unknown): Authority {
     : [];
   const createdAt = requiredString(row, 'created_at');
   const updatedAt = asString(row.updated_at);
+  const verificationStatus = row.verification_status;
+  const lastVerifiedAt = asString(row.last_verified_at);
   if (typeof row.jurisdiction_level !== 'number' || typeof row.priority !== 'number') {
     throw new Error('The authority response is missing jurisdiction priority data.');
   }
@@ -97,6 +99,12 @@ function parseAuthority(value: unknown): Authority {
     id: requiredString(row, 'id'),
     name: requiredString(row, 'name'),
     nameLocal: asString(row.name_local),
+    verificationStatus: verificationStatus === 'verified' || verificationStatus === 'seed'
+      || verificationStatus === 'expired' || verificationStatus === 'rejected'
+      ? verificationStatus
+      : undefined,
+    sourceUrl: asString(row.source_url),
+    lastVerifiedAt: lastVerifiedAt ? new Date(lastVerifiedAt) : undefined,
     twitter: asString(twitter?.handle),
     socialMedia,
     jurisdiction: {
@@ -207,8 +215,8 @@ const SAMPLE_AUTHORITIES: Partial<Authority>[] = [
  * Implements the algorithm from PDF section 2.9.2
  */
 export async function findAuthorities(params: {
-  lat: number;
-  lng: number;
+  lat?: number;
+  lng?: number;
   category: IssueCategory;
   city?: string;
   state?: string;
@@ -216,17 +224,25 @@ export async function findAuthorities(params: {
   const { lat, lng, category, city, state } = params;
   if (!isSupabaseConfigured) throw new Error('Authority lookup is unavailable because Supabase is not configured.');
 
-  const geohash = encodeGeohash(lat, lng, 8);
+  if ((lat === undefined) !== (lng === undefined)) {
+    throw new Error('Both location coordinates are required for authority matching.');
+  }
+  const hasCoordinates = lat !== undefined && lng !== undefined;
+  if (hasCoordinates && (!Number.isFinite(lat) || !Number.isFinite(lng)
+      || lat < -90 || lat > 90 || lng < -180 || lng > 180)) {
+    throw new Error('The report coordinates are invalid for authority matching.');
+  }
+  const geohash = hasCoordinates ? encodeGeohash(lat, lng, 8) : '';
   const { data, error } = await supabase
     .from('authorities')
-    .select('id,name,name_local,social_media,jurisdiction_type,jurisdiction_level,country,state,city,ward,zone,geohashes,issue_categories,priority,contact_info,response_metrics,status,verified_by,created_at,updated_at')
+    .select('id,name,name_local,social_media,jurisdiction_type,jurisdiction_level,country,state,city,ward,zone,geohashes,issue_categories,priority,contact_info,response_metrics,status,verified_by,verification_status,source_url,last_verified_at,created_at,updated_at')
     .eq('status', 'active')
     .contains('issue_categories', [category]);
-  if (error) throw new Error('Could not load matching authorities.');
+  if (error) throw new Error(`Could not load matching authorities (${error.code || 'unknown'}: ${error.message || 'database request failed'}).`);
 
   const candidates: Authority[] = (data ?? []).map((row: unknown) => parseAuthority(row));
   const matching = candidates.filter((authority) => {
-    const geographicMatch = authority.jurisdiction.geohashes.some(
+    const geographicMatch = hasCoordinates && authority.jurisdiction.geohashes.some(
       (prefix) => prefix.length > 0 && geohash.startsWith(prefix),
     );
     const cityMatch = Boolean(city) &&
@@ -238,8 +254,7 @@ export async function findAuthorities(params: {
 
   const unique = new Map(matching.map((authority) => [authority.id, authority]));
   return [...unique.values()]
-    .sort((left, right) => left.priority - right.priority)
-    .slice(0, 5);
+    .sort((left, right) => left.priority - right.priority);
 }
 
 /**

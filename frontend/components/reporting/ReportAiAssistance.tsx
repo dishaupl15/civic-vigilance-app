@@ -17,6 +17,7 @@ interface Props {
   title: string;
   category: CategoryKey;
   description: string;
+  onGenerated: (content: GeneratedReportContent) => void;
   onUseTitle: (value: string) => void;
   onUseDescription: (value: string) => void;
   onUseCategory: (value: CategoryKey) => void;
@@ -26,6 +27,7 @@ export default function ReportAiAssistance({
   title,
   category,
   description,
+  onGenerated,
   onUseTitle,
   onUseDescription,
   onUseCategory,
@@ -41,6 +43,7 @@ export default function ReportAiAssistance({
     try {
       const content = await requestReportContent({ title, category, description }, privacyAccepted);
       setGenerated(content);
+      onGenerated(content);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'AI writing assistance is unavailable. Continue manually.');
     } finally {

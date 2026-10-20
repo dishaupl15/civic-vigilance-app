@@ -155,6 +155,9 @@ export interface Authority {
   id: string;
   name: string;
   nameLocal?: string;
+  verificationStatus?: 'verified' | 'seed' | 'expired' | 'rejected';
+  sourceUrl?: string;
+  lastVerifiedAt?: Date;
 
   // Backward compatibility - direct twitter handle
   twitter?: string;
@@ -305,6 +308,9 @@ export interface IssueWithUserData {
     address?: string;
     geohash?: string;
   };
+  locationAccuracyM?: number;
+  locationSource?: 'gps' | 'manual';
+  locationConfirmed?: boolean;
   privacy?: TwitterPostingMethod;
   authorities?: string[];
   tweetId?: string;

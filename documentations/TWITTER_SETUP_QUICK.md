@@ -1,5 +1,10 @@
 # Twitter Setup - Quick Start Guide
 
+> Historical setup guide; its Supabase Edge Function setup and claims about
+> configured credentials are obsolete. Use `backend/README.md` and
+> `PRODUCTION_SETUP.md` for current X account-linking setup. Posting is not
+> implemented.
+
 Your project is configured and ready! Here's what to do next:
 
 ## 📋 Your Project Info

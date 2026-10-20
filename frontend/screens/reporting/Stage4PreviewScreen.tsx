@@ -22,7 +22,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import Button from '../../components/ui/Button';
 import { TwitterPostingMethod, CategoryKey } from '../../types';
-import { getMatchedAuthoritiesWithDetails } from '../../lib/smartAuthorities';
+import { MatchedAuthority } from '../../lib/smartAuthorities';
 import { Colors, Shadows, Typography, BorderRadius } from '../../constants/DesignSystem';
 
 interface Props {
@@ -33,6 +33,7 @@ interface Props {
   address: string;
   coords: { lat: number; lng: number } | null;
   selectedAuthorityHandles: string[];
+  authoritySuggestions: MatchedAuthority[];
   privacy: TwitterPostingMethod;
   onSubmit: () => void;
   onBack: () => void;
@@ -63,6 +64,7 @@ export default function Stage4PreviewScreen({
   address,
   coords,
   selectedAuthorityHandles,
+  authoritySuggestions,
   privacy,
   onSubmit,
   onBack,
@@ -71,14 +73,8 @@ export default function Stage4PreviewScreen({
 }: Props) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const authorities = useMemo(() => {
-    const matches = getMatchedAuthoritiesWithDetails(
-      coords?.lat,
-      coords?.lng,
-      address,
-      category
-    );
-    return matches.filter((authority) => selectedAuthorityHandles.includes(authority.handle));
-  }, [coords?.lat, coords?.lng, category, address, selectedAuthorityHandles]);
+    return authoritySuggestions.filter((authority) => selectedAuthorityHandles.includes(authority.handle));
+  }, [authoritySuggestions, selectedAuthorityHandles]);
 
   const handleSubmit = async () => {
     setIsSubmitting(true);

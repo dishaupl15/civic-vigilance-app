@@ -16,11 +16,14 @@ import { AUTHORITIES_SEED_DATA } from './authoritiesData';
 import { IssueCategory } from '../types';
 
 export interface MatchedAuthority {
+  id?: string;
   handle: string;
   name: string;
   confidence: number; // 0-1 based on match quality
   matchReason: string; // For debugging
   sourceUrl?: string;
+  profileUrl?: string;
+  lastVerifiedAt?: string;
   verificationStatus: 'verified' | 'seed' | 'expired';
 }
 

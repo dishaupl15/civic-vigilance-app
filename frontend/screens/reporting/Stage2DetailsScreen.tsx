@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Alert,
   Image,
@@ -16,8 +16,18 @@ import { Ionicons } from '@expo/vector-icons';
 import Button from '../../components/ui/Button';
 import CategoryPicker, { CategoryKey } from '../../components/CategoryPicker';
 import { BorderRadius, Colors, Shadows, Typography } from '../../constants/DesignSystem';
-import { parseOptionalCoordinates } from '../../lib/reportValidation';
-import { getAuthorityRecommendations } from '../../lib/authorityRecommendations';
+import {
+  normalizeReportAddress,
+  parseOptionalCoordinates,
+  validateReportAddress,
+} from '../../lib/reportValidation';
+import {
+  AuthorityRecommendations,
+  emptyAuthorityRecommendations,
+  getAuthorityRecommendations,
+} from '../../lib/authorityRecommendations';
+import { MatchedAuthority } from '../../lib/smartAuthorities';
+import { GeneratedReportContent } from '../../lib/reportContentSchema';
 import ReportAiAssistance from '../../components/reporting/ReportAiAssistance';
 
 interface Props {
@@ -25,6 +35,7 @@ interface Props {
   initialAddress: string;
   coords: { lat: number; lng: number } | null;
   accuracy?: number;
+  onGeneratedReportContent: (content: GeneratedReportContent) => void;
   onContinue: (data: {
     title: string;
     category: CategoryKey;
@@ -35,11 +46,20 @@ interface Props {
     locationSource: 'gps' | 'manual';
     locationConfirmed: true;
     selectedAuthorityHandles: string[];
+    authoritySuggestions: MatchedAuthority[];
   }) => void;
   onBack: () => void;
 }
 
-export default function Stage2DetailsScreen({ photos, initialAddress, coords, accuracy, onContinue, onBack }: Props) {
+export default function Stage2DetailsScreen({
+  photos,
+  initialAddress,
+  coords,
+  accuracy,
+  onGeneratedReportContent,
+  onContinue,
+  onBack,
+}: Props) {
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<CategoryKey>('pothole');
   const [description, setDescription] = useState('');
@@ -50,10 +70,52 @@ export default function Stage2DetailsScreen({ photos, initialAddress, coords, ac
   const parsedCoordinates = parseOptionalCoordinates(latitude, longitude);
   const currentCoords = parsedCoordinates.coordinates;
   const [selectedAuthorityHandles, setSelectedAuthorityHandles] = useState<string[]>([]);
-  const recommendations = useMemo(
-    () => getAuthorityRecommendations(currentCoords?.lat, currentCoords?.lng, address, category),
-    [currentCoords?.lat, currentCoords?.lng, address, category]
-  );
+  const [recommendations, setRecommendations] = useState<AuthorityRecommendations>(() => emptyAuthorityRecommendations(category));
+  const [recommendationsLoading, setRecommendationsLoading] = useState(false);
+  const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
+  const [recommendationRetry, setRecommendationRetry] = useState(0);
+  const [recommendationsContext, setRecommendationsContext] = useState<string | null>(null);
+  const currentRecommendationContext = JSON.stringify([
+    currentCoords?.lat ?? null,
+    currentCoords?.lng ?? null,
+    address,
+    category,
+  ]);
+
+  useEffect(() => {
+    let active = true;
+    const requestContext = currentRecommendationContext;
+    setRecommendationsLoading(true);
+    setRecommendationsError(null);
+    setRecommendations(emptyAuthorityRecommendations(category));
+    setRecommendationsContext(null);
+    setSelectedAuthorityHandles([]);
+    const timer = setTimeout(() => {
+      void getAuthorityRecommendations(currentCoords?.lat, currentCoords?.lng, address, category)
+        .then((result) => {
+          if (active) {
+            setRecommendations(result);
+            setRecommendationsContext(requestContext);
+          }
+        })
+        .catch((cause) => {
+          if (!active) return;
+          setRecommendations(emptyAuthorityRecommendations(category));
+          setRecommendationsContext(requestContext);
+          setRecommendationsError(cause instanceof Error
+            ? cause.message
+            : 'Could not load verified account suggestions.');
+        })
+        .finally(() => {
+          if (active) setRecommendationsLoading(false);
+        });
+    }, 300);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [currentCoords?.lat, currentCoords?.lng, address, category, currentRecommendationContext, recommendationRetry]);
+
   useEffect(() => {
     const availableHandles = new Set(recommendations.accounts.map((authority) => authority.handle));
     setSelectedAuthorityHandles((current) => current.filter((handle) => availableHandles.has(handle)));
@@ -64,25 +126,31 @@ export default function Stage2DetailsScreen({ photos, initialAddress, coords, ac
 
   const handleContinue = () => {
     const normalizedTitle = title.trim();
+    const normalizedAddress = normalizeReportAddress(address);
     if (normalizedTitle.length < 10 || normalizedTitle.length > 100) {
       return Alert.alert('Title Length', 'Enter a factual title between 10 and 100 characters.');
     }
     if (!description.trim()) return Alert.alert('Description Required', 'Describe the visible civic issue.');
-    if (!address.trim()) return Alert.alert('Location Required', 'Confirm the detected address or enter it manually.');
+    const addressError = validateReportAddress(normalizedAddress);
+    if (addressError) return Alert.alert('Location Required', addressError);
 
     if (parsedCoordinates.error) return Alert.alert('Invalid Coordinates', parsedCoordinates.error);
+    const availableAuthorities = recommendationsContext === currentRecommendationContext
+      ? recommendations.accounts
+      : [];
     onContinue({
       title: normalizedTitle,
       category,
       description: description.trim(),
-      address: address.trim(),
+      address: normalizedAddress,
       coords: currentCoords,
       locationAccuracy: gpsCoordinatesUnchanged ? accuracy : undefined,
       locationSource: gpsCoordinatesUnchanged ? 'gps' : 'manual',
       locationConfirmed: true,
       selectedAuthorityHandles: selectedAuthorityHandles.filter((handle) =>
-        recommendations.accounts.some((authority) => authority.handle === handle)
+        availableAuthorities.some((authority) => authority.handle === handle)
       ),
+      authoritySuggestions: availableAuthorities,
     });
   };
 
@@ -123,6 +191,7 @@ export default function Stage2DetailsScreen({ photos, initialAddress, coords, ac
           title={title}
           category={category}
           description={description}
+          onGenerated={onGeneratedReportContent}
           onUseTitle={setTitle}
           onUseDescription={setDescription}
           onUseCategory={setCategory}
@@ -135,7 +204,7 @@ export default function Stage2DetailsScreen({ photos, initialAddress, coords, ac
           </View>
           {editingLocation ? (
             <>
-              <TextInput style={[styles.input, styles.textAreaSmall]} value={address} onChangeText={setAddress} multiline placeholder="Street, landmark, city and state" />
+              <TextInput style={[styles.input, styles.textAreaSmall]} value={address} onChangeText={setAddress} multiline maxLength={300} placeholder="Street, landmark, city and state" />
               <View style={styles.coordinateRow}>
                 <TextInput style={[styles.input, styles.coordinateInput]} value={latitude} onChangeText={setLatitude} keyboardType="numbers-and-punctuation" placeholder="Latitude (optional)" />
                 <TextInput style={[styles.input, styles.coordinateInput]} value={longitude} onChangeText={setLongitude} keyboardType="numbers-and-punctuation" placeholder="Longitude (optional)" />
@@ -173,6 +242,15 @@ export default function Stage2DetailsScreen({ photos, initialAddress, coords, ac
             Optional suggestions only. Confirm any account on its official website.
             Civic Vigilance does not contact or notify them. Selected handles are only included in the X draft if you choose external sharing.
           </Text>
+          {recommendationsLoading && <Text style={styles.meta}>Checking the verified authority directory…</Text>}
+          {!!recommendationsError && (
+            <View>
+              <Text accessibilityRole="alert" style={styles.meta}>{recommendationsError}</Text>
+              <Pressable onPress={() => setRecommendationRetry((attempt) => attempt + 1)}>
+                <Text style={styles.link}>Retry account lookup</Text>
+              </Pressable>
+            </View>
+          )}
           {recommendations.accounts.map((authority) => {
             const selected = selectedAuthorityHandles.includes(authority.handle);
             const sourceUrl = authority.sourceUrl;
@@ -190,9 +268,26 @@ export default function Stage2DetailsScreen({ photos, initialAddress, coords, ac
                   <Text style={styles.authorityCheckbox}>{selected ? '☑' : '□'}</Text>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.address}>{authority.name} ({authority.handle})</Text>
-                    <Text style={styles.meta}>Verified directory entry · {authority.matchReason}</Text>
+                    <Text style={styles.meta}>
+                      Verified directory entry{authority.lastVerifiedAt ? ` · checked ${new Date(authority.lastVerifiedAt).toLocaleDateString()}` : ''} · {authority.matchReason}
+                    </Text>
                   </View>
                 </Pressable>
+                {authority.profileUrl && (
+                  <View style={styles.authoritySource}>
+                    <Text
+                      accessibilityRole="link"
+                      style={styles.link}
+                      onPress={() => {
+                        void Linking.openURL(authority.profileUrl!).catch(() =>
+                          Alert.alert('Profile Unavailable', 'Could not open the listed account profile.')
+                        );
+                      }}
+                    >
+                      Open listed account profile
+                    </Text>
+                  </View>
+                )}
                 {sourceUrl && (
                   <View style={styles.authoritySource}>
                     <Text

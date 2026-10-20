@@ -1,5 +1,17 @@
 import { createComplaintDraft } from '../lib/complaintDraft';
-import { isValidCoordinate, parseOptionalCoordinates, validateEvidencePhotos, validateReportLocation } from '../lib/reportValidation';
+import { composePostText } from '../lib/sharingEnhanced';
+import {
+  isValidCoordinate,
+  normalizeReportAddress,
+  parseOptionalCoordinates,
+  validateEvidencePhotos,
+  validateReportAddress,
+  validateReportLocation,
+} from '../lib/reportValidation';
+
+jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn() }));
+jest.mock('expo-linking', () => ({ canOpenURL: jest.fn(), openURL: jest.fn() }));
+jest.mock('expo-file-system', () => ({ cacheDirectory: '/cache/', copyAsync: jest.fn() }));
 
 describe('reporting reliability', () => {
   test('rejects invalid coordinates without inventing a fallback', () => {
@@ -29,6 +41,22 @@ describe('reporting reliability', () => {
       .toBe('Location accuracy must be a non-negative finite number and requires coordinates');
     expect(validateReportLocation(undefined, undefined, 18))
       .toBe('Location accuracy must be a non-negative finite number and requires coordinates');
+  });
+
+  test('includes valid zero-valued coordinates in shared location links', () => {
+    expect(composePostText({ title: 'Civic issue', lat: 0, lng: 0 }))
+      .toContain('https://maps.google.com/?q=0,0');
+    expect(composePostText({ title: 'Civic issue', lat: 0, lng: 20 }))
+      .toContain('https://maps.google.com/?q=0,20');
+    expect(composePostText({ title: 'Civic issue', lat: Number.NaN, lng: 20 }))
+      .not.toContain('maps.google.com');
+  });
+
+  test('normalizes and validates confirmed report addresses', () => {
+    expect(normalizeReportAddress('  MG Road,\n  Bengaluru  ')).toBe('MG Road, Bengaluru');
+    expect(validateReportAddress(' MG Road, Bengaluru ')).toBeNull();
+    expect(validateReportAddress(' \n\t ')).toMatch(/enter a location manually/i);
+    expect(validateReportAddress('x'.repeat(301))).toMatch(/300 characters or fewer/i);
   });
 
   test('requires one to three genuine evidence references', () => {

@@ -25,6 +25,7 @@ export default function SignupScreen() {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [confirmationNotice, setConfirmationNotice] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const submittingRef = useRef(false);
 
@@ -38,16 +39,17 @@ export default function SignupScreen() {
     submittingRef.current = true;
     setIsLoading(true);
     setError(null);
+    setConfirmationNotice(null);
     try {
       const res = await signUp(email.trim(), password);
       if (res?.error) {
         setError(res.error);
       } else if (res?.data?.user && Array.isArray(res.data.user.identities) && res.data.user.identities.length === 0) {
         setError('An account with this email already exists. Try signing in or resetting your password.');
+      } else if (res?.data?.user && !res.data.session) {
+        setConfirmationNotice('Account created. Check your email for a confirmation link before signing in.');
       } else if (!res?.data?.session) {
-        setError(
-          'Supabase did not return an active session. Check that email confirmation is disabled in Supabase Auth, then try again.'
-        );
+        setError('Could not confirm account creation. Please try again.');
       }
     } catch {
       setError('Could not create your account. Check your connection and try again.');
@@ -80,6 +82,11 @@ export default function SignupScreen() {
             )}
 
             {!!error && <Text style={styles.error} accessibilityRole="alert">{error}</Text>}
+            {!!confirmationNotice && (
+              <Text style={styles.confirmationNotice} accessibilityRole="alert">
+                {confirmationNotice}
+              </Text>
+            )}
 
             <TextField
               label="Email"
@@ -159,6 +166,16 @@ const styles = StyleSheet.create({
     color: Colors.error,
     backgroundColor: Colors.errorLight,
     borderColor: Colors.errorBorder,
+    borderWidth: 1,
+    padding: 12,
+    borderRadius: BorderRadius.md,
+    marginBottom: Spacing.md,
+  },
+  confirmationNotice: {
+    ...Typography.body,
+    color: Colors.textMain,
+    backgroundColor: Colors.primaryLight,
+    borderColor: Colors.primary,
     borderWidth: 1,
     padding: 12,
     borderRadius: BorderRadius.md,

@@ -1,3 +1,18 @@
+export const MAX_REPORT_ADDRESS_LENGTH = 300;
+
+export function normalizeReportAddress(address: string): string {
+  return address.normalize('NFC').replace(/\s+/g, ' ').trim();
+}
+
+export function validateReportAddress(address: string): string | null {
+  const normalized = normalizeReportAddress(address);
+  if (!normalized) return 'Confirm an address or enter a location manually.';
+  if (normalized.length > MAX_REPORT_ADDRESS_LENGTH) {
+    return `Location must be ${MAX_REPORT_ADDRESS_LENGTH} characters or fewer.`;
+  }
+  return null;
+}
+
 export function isValidCoordinate(lat: number, lng: number) {
   return Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
 }

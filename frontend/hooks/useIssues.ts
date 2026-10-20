@@ -1,15 +1,26 @@
 import { useEffect, useState } from 'react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { getBackend } from '../lib/backend';
-import { IssueWithUserData } from '../types';
+import { IssueCategory, IssueWithUserData } from '../types';
 import { createIssueSqlite, listIssues as listIssuesSqlite, ensureSeedIssues } from '../lib/sqliteIssues';
 import { ensureSessionUserId } from '../lib/sqliteAuth';
 import { useAuth } from './useAuth';
 import { calculateDistance, encodeGeohash } from '../lib/geohash';
 import { mapDatabaseIssueRow, mapLocalIssueRow } from '../lib/issueMapper';
-import { validateReportLocation } from '../lib/reportValidation';
+import {
+  normalizeReportAddress,
+  validateReportAddress,
+  validateReportLocation,
+} from '../lib/reportValidation';
+import { MatchedAuthority } from '../lib/smartAuthorities';
+import { GeneratedReportSnapshot, saveIssueEnhancements } from '../lib/issueEnhancements';
 
 type SortMode = 'trending' | 'newest' | 'nearby';
+
+function reportQueryError(fallback: string, error: { code?: string; message?: string }): Error {
+  const details = [error.code, error.message].filter(Boolean).join(': ');
+  return new Error(details ? `${fallback} (${details})` : fallback);
+}
 
 export function useIssues(sort: SortMode, coords?: { lat: number; lng: number } | null) {
   const [data, setData] = useState<IssueWithUserData[]>([]);
@@ -73,8 +84,10 @@ export function useIssues(sort: SortMode, coords?: { lat: number; lng: number } 
   ];
 
   useEffect(() => {
+    let active = true;
     const run = async () => {
       setLoading(true);
+      setError(null);
 
       // Check for guest user in session
       const isGuest = session?.user?.email === '__guest__';
@@ -83,6 +96,7 @@ export function useIssues(sort: SortMode, coords?: { lat: number; lng: number } 
         // Return sorted dummy data for visualization
         if (__DEV__) console.log('[useIssues] Serving dummy data for Guest Mode');
         await new Promise(r => setTimeout(r, 500)); // Fake network delay
+        if (!active) return;
 
         // Clone to avoid mutating sorting reference
         let sortedIssues = [...DUMMY_ISSUES];
@@ -108,10 +122,16 @@ export function useIssues(sort: SortMode, coords?: { lat: number; lng: number } 
         return;
       }
 
+      if (getBackend() === 'supabase' && !session?.user?.id) {
+        setData([]);
+        setLoading(false);
+        return;
+      }
+
       try {
-        setError(null);
         if (getBackend() === 'sqlite') {
           const uid = await ensureSessionUserId();
+          if (!active) return;
           ensureSeedIssues(uid);
           const reports = listIssuesSqlite(sort === 'trending' ? sort : 'newest').map(mapLocalIssueRow);
           if (sort === 'nearby' && coords) {
@@ -131,9 +151,10 @@ export function useIssues(sort: SortMode, coords?: { lat: number; lng: number } 
             .select('*,issue_metrics(upvotes,downvotes,comments,shares,twitter_impressions)')
             .order('created_at', { ascending: false })
             .limit(100);
-          if (queryError) throw new Error('Could not load reports. Please try again.');
+          if (queryError) throw reportQueryError('Could not load reports.', queryError);
 
           const reports = await Promise.all((rows ?? []).map(mapDatabaseIssueRow));
+          if (!active) return;
           if (sort === 'trending') {
             reports.sort((a, b) =>
               (b.upvotes ?? 0) - (a.upvotes ?? 0) ||
@@ -150,14 +171,17 @@ export function useIssues(sort: SortMode, coords?: { lat: number; lng: number } 
           setData(reports);
         }
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : 'Could not load reports.');
-        setData([]);
+        if (active) {
+          setError(cause instanceof Error ? cause.message : 'Could not load reports.');
+          setData([]);
+        }
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     };
     void run();
-  }, [sort, coords?.lat, coords?.lng, session?.user?.id]);
+    return () => { active = false; };
+  }, [sort, coords?.lat, coords?.lng, session?.user?.id, session?.user?.email]);
 
   return { data, loading, error };
 }
@@ -176,7 +200,7 @@ export async function createIssue(payload: {
   user_id?: string;
   title: string;
   description: string;
-  category: string;
+  category: IssueCategory;
   photos: string[];
   lat?: number;
   lng?: number;
@@ -185,6 +209,9 @@ export async function createIssue(payload: {
   location_source: 'gps' | 'manual';
   location_confirmed: boolean;
   privacy: 'twitter' | 'none';
+  authorities?: string[];
+  authority_suggestions?: MatchedAuthority[];
+  generated_contents?: GeneratedReportSnapshot[];
 }): Promise<IssueWithUserData> {
   const title = payload.title.trim();
   // Input validation
@@ -209,16 +236,23 @@ export async function createIssue(payload: {
     throw new Error('One to three uploaded photos are required');
   }
   if (!payload.address?.trim() || !payload.location_confirmed) throw new Error('A confirmed location is required');
+  const normalizedAddress = normalizeReportAddress(payload.address);
+  const addressError = validateReportAddress(normalizedAddress);
+  if (addressError) throw new Error(addressError);
   const locationError = validateReportLocation(payload.lat, payload.lng, payload.location_accuracy_m);
   if (locationError) throw new Error(locationError);
   const hasCoords = payload.lat !== undefined && payload.lng !== undefined;
+  const authorities = [...new Set(payload.authorities ?? [])];
+  if (authorities.some((handle) => !/^@[A-Za-z0-9_]{1,15}$/.test(handle))) {
+    throw new Error('A selected authority account handle is invalid.');
+  }
 
   // Sanitize user-generated text content
   const sanitizedPayload = {
     ...payload,
     title: sanitizeInput(title),
     description: sanitizeInput(payload.description.trim()),
-    address: sanitizeInput(payload.address),
+    address: sanitizeInput(normalizedAddress),
   };
 
   if (getBackend() === 'sqlite') {
@@ -238,6 +272,17 @@ export async function createIssue(payload: {
 
   if (!isSupabaseConfigured) throw new Error('Supabase is not configured.');
   const issueSelect = '*,issue_metrics(upvotes,downvotes,comments,shares,twitter_impressions)';
+  const persistEnhancements = async (issueId: string) => {
+    if (!payload.authority_suggestions?.length && !payload.generated_contents?.length) return;
+    await saveIssueEnhancements({
+      issueId,
+      userId: payload.user_id!,
+      category: payload.category,
+      authoritySuggestions: payload.authority_suggestions ?? [],
+      selectedAuthorityHandles: authorities,
+      generatedContents: payload.generated_contents ?? [],
+    });
+  };
   const { data: existing, error: existingError } = await supabase
     .from('issues')
     .select(issueSelect)
@@ -245,7 +290,10 @@ export async function createIssue(payload: {
     .eq('user_id', sanitizedPayload.user_id)
     .maybeSingle();
   if (existingError) throw new Error('Could not check whether this report was already submitted.');
-  if (existing) return mapDatabaseIssueRow(existing);
+  if (existing) {
+    await persistEnhancements(existing.id);
+    return mapDatabaseIssueRow(existing);
+  }
 
   const location = hasCoords ? `POINT(${sanitizedPayload.lng} ${sanitizedPayload.lat})` : null;
   const geohash = hasCoords ? encodeGeohash(sanitizedPayload.lat!, sanitizedPayload.lng!, 8) : '';
@@ -262,6 +310,7 @@ export async function createIssue(payload: {
     location_accuracy_m: sanitizedPayload.location_accuracy_m ?? null,
     location_source: sanitizedPayload.location_source,
     location_confirmed: sanitizedPayload.location_confirmed,
+    authorities,
     privacy: sanitizedPayload.privacy === 'twitter' ? 'personal' : 'none',
     visibility: sanitizedPayload.privacy === 'none' ? 'private' : 'public',
     anonymous_username: 'Anonymous Citizen',
@@ -269,5 +318,6 @@ export async function createIssue(payload: {
   };
   const { data, error } = await supabase.from('issues').insert(dbPayload).select(issueSelect).single();
   if (error) throw error;
+  await persistEnhancements(data.id);
   return mapDatabaseIssueRow(data);
 }

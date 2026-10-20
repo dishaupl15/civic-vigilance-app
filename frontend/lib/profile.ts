@@ -154,7 +154,12 @@ export async function saveProfile(p: UserProfile) {
   }
 
   const operations = [];
-  if (Object.keys(profilePayload).length > 1) operations.push(supabase.from('profiles').update(profilePayload).eq('id', p.id));
+  if (Object.keys(profilePayload).length > 1) {
+    operations.push(supabase.from('profiles').upsert(
+      { id: p.id, ...profilePayload },
+      { onConflict: 'id' },
+    ));
+  }
   if (Object.keys(userPayload).length > 1) operations.push(supabase.from('users').update(userPayload).eq('id', p.id));
   if (Object.keys(preferencePayload).length > 1) operations.push(supabase.from('user_preferences').update(preferencePayload).eq('user_id', p.id));
   const results = await Promise.all(operations);

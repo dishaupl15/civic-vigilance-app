@@ -1,5 +1,11 @@
 # Twitter Integration with Supabase Edge Functions
 
+> Historical setup guide. The described Edge Function OAuth/posting flow is
+> retired and must not be used. Current X account linking is handled by the
+> authenticated Node.js API; see `backend/README.md` and
+> `PRODUCTION_SETUP.md`. Do not deploy this guide's functions or use its
+> credentials/configuration steps.
+
 This guide shows you how to set up Twitter posting using Supabase Edge Functions instead of Firebase Cloud Functions.
 
 ## ✅ Advantages of Using Supabase for Twitter

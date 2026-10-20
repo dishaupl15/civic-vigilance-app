@@ -13,6 +13,8 @@ import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../hooks/useAuth';
 import { TwitterPostingMethod, CategoryKey } from '../types';
 import { createIssue } from '../hooks/useIssues';
+import { MatchedAuthority } from '../lib/smartAuthorities';
+import { GeneratedReportContent } from '../lib/reportContentSchema';
 import { uploadPhotos } from '../lib/storage';
 import { composePostText, shareToTwitter, showShareDialog } from '../lib/sharingEnhanced';
 import { clearReportDraft, saveReportDraft } from '../lib/reportDrafts';
@@ -36,6 +38,8 @@ interface ReportData {
   locationSource?: 'gps' | 'manual';
   locationConfirmed?: boolean;
   selectedAuthorityHandles: string[];
+  authoritySuggestions: MatchedAuthority[];
+  generatedReportContents: { generationId: string; content: GeneratedReportContent }[];
   clientRequestId: string;
 
   // Stage 2
@@ -63,6 +67,8 @@ export default function ReportIssueScreenV2() {
     coords: null,
     address: '',
     selectedAuthorityHandles: [],
+    authoritySuggestions: [],
+    generatedReportContents: [],
     clientRequestId: Crypto.randomUUID(),
   });
   const submitting = useRef(false);
@@ -93,9 +99,20 @@ export default function ReportIssueScreenV2() {
     locationSource: 'gps' | 'manual';
     locationConfirmed: true;
     selectedAuthorityHandles: string[];
+    authoritySuggestions: MatchedAuthority[];
   }) => {
     setReportData((current) => ({ ...current, ...data }));
     setCurrentStage(3);
+  };
+
+  const handleGeneratedReportContent = (content: GeneratedReportContent) => {
+    setReportData((current) => ({
+      ...current,
+      generatedReportContents: [
+        ...current.generatedReportContents,
+        { generationId: Crypto.randomUUID(), content },
+      ],
+    }));
   };
 
   // Stage 3: Privacy -> Stage 4: Preview
@@ -151,6 +168,9 @@ export default function ReportIssueScreenV2() {
         location_source: reportData.locationSource || 'manual',
         location_confirmed: true,
         privacy: reportData.privacy || 'none',
+        authorities: reportData.selectedAuthorityHandles,
+        authority_suggestions: reportData.authoritySuggestions,
+        generated_contents: reportData.generatedReportContents,
       });
 
       // Step 3: Share to Twitter via deep link (if user chose Twitter sharing)
@@ -226,6 +246,8 @@ export default function ReportIssueScreenV2() {
       coords: null,
       address: '',
       selectedAuthorityHandles: [],
+      authoritySuggestions: [],
+      generatedReportContents: [],
       clientRequestId: Crypto.randomUUID(),
     });
     // @ts-ignore
@@ -249,6 +271,7 @@ export default function ReportIssueScreenV2() {
           coords={reportData.coords}
           accuracy={reportData.locationAccuracy}
           onContinue={handleStage2Complete}
+          onGeneratedReportContent={handleGeneratedReportContent}
           onBack={() => handleBack(1)}
         />
       )}
@@ -270,6 +293,7 @@ export default function ReportIssueScreenV2() {
           address={reportData.address}
           coords={reportData.coords}
           selectedAuthorityHandles={reportData.selectedAuthorityHandles}
+          authoritySuggestions={reportData.authoritySuggestions}
           privacy={reportData.privacy || 'twitter'}
           onSubmit={handleStage4Submit}
           onBack={() => handleBack(3)}

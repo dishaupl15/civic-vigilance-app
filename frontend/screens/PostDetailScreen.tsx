@@ -13,6 +13,7 @@ import { formatCount, getTimeAgo } from '../lib/format';
 import { CATEGORY_EMOJIS } from '../components/CategoryPicker';
 import { showShareDialog, composePostText } from '../lib/sharingEnhanced';
 import { mapDatabaseCommentRow, mapDatabaseIssueRow, mapLocalCommentRow, mapLocalIssueRow } from '../lib/issueMapper';
+import { loadIssueEnhancements, SavedIssueEnhancements } from '../lib/issueEnhancements';
 
 export default function PostDetailScreen({ route }: any) {
   const { id } = route.params as { id: string };
@@ -29,6 +30,10 @@ export default function PostDetailScreen({ route }: any) {
   const [commentSubmitting, setCommentSubmitting] = useState(false);
   const [commentError, setCommentError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [savedEnhancements, setSavedEnhancements] = useState<SavedIssueEnhancements | null>(null);
+  const [enhancementsLoading, setEnhancementsLoading] = useState(false);
+  const [enhancementsError, setEnhancementsError] = useState<string | null>(null);
+  const [enhancementRetry, setEnhancementRetry] = useState(0);
   const { session, isGuest, signOut } = useAuth();
   const localUserId = Number(session?.user?.id || 1);
   const signOutForLogin = async () => {
@@ -41,6 +46,9 @@ export default function PostDetailScreen({ route }: any) {
     const run = async () => {
       try {
         setLoadError(null);
+        setSavedEnhancements(null);
+        setEnhancementsLoading(false);
+        setEnhancementsError(null);
         if (id.startsWith('dummy-')) {
         // Mock data for dummy issues
         const dummyIssue: IssueWithUserData = {
@@ -93,21 +101,45 @@ export default function PostDetailScreen({ route }: any) {
           .from('issues')
           .select('*,issue_metrics(upvotes,downvotes,comments,shares,twitter_impressions)')
           .eq('id', id)
-          .single();
-        if (error) throw new Error('Could not load this report.');
+          .maybeSingle();
+        if (error) {
+          const details = [error.code, error.message].filter(Boolean).join(': ');
+          throw new Error(details ? `Could not load this report (${details}).` : 'Could not load this report.');
+        }
+        if (!data) throw new Error('This report was not found or is not available to your account.');
         const mappedIssue = await mapDatabaseIssueRow(data);
         const { data: commentRows, error: commentsError } = await supabase
           .from('comments')
           .select('*')
           .eq('issue_id', id)
           .order('created_at', { ascending: true });
-        if (commentsError) throw new Error('Could not load comments for this report.');
+        if (commentsError) {
+          const details = [commentsError.code, commentsError.message].filter(Boolean).join(': ');
+          throw new Error(details ? `Could not load comments for this report (${details}).` : 'Could not load comments for this report.');
+        }
         const mappedComments = (commentRows ?? []).map(mapDatabaseCommentRow);
         if (!active) return;
         setIssue(mappedIssue);
         setComments(mappedComments);
         setUp(mappedIssue.upvotes ?? 0);
         setDown(mappedIssue.downvotes ?? 0);
+        if (session?.user?.id === mappedIssue.userId) {
+          setEnhancementsLoading(true);
+          void loadIssueEnhancements(id, session.user.id)
+            .then((enhancements) => {
+              if (active) setSavedEnhancements(enhancements);
+            })
+            .catch((cause) => {
+              if (active) setEnhancementsError(cause instanceof Error
+                ? cause.message
+                : 'Could not load saved report assistance.');
+            })
+            .finally(() => {
+              if (active) setEnhancementsLoading(false);
+            });
+        } else {
+          setEnhancementsLoading(false);
+        }
       }
       } catch (cause) {
         if (active) setLoadError(cause instanceof Error ? cause.message : 'Could not load this report.');
@@ -115,7 +147,7 @@ export default function PostDetailScreen({ route }: any) {
     };
     void run();
     return () => { active = false; };
-  }, [id]);
+  }, [id, session?.user?.id, enhancementRetry]);
 
   useEffect(() => {
     let active = true;
@@ -387,6 +419,50 @@ export default function PostDetailScreen({ route }: any) {
         {/* Description */}
         <Text style={styles.description}>{issue.description || 'No description provided.'}</Text>
       </View>
+
+      {session?.user?.id === issue.userId && (
+        <View style={{ padding: 16, borderBottomWidth: 1, borderBottomColor: '#E5E7EB', gap: 8 }}>
+          <Text style={{ fontSize: 18, fontWeight: '700', color: '#23272F' }}>Saved report assistance</Text>
+          {enhancementsLoading && <Text style={{ color: '#6B7280' }}>Loading your saved suggestions and drafts…</Text>}
+          {!!enhancementsError && (
+            <View>
+              <Text accessibilityRole="alert" style={{ color: '#B91C1C' }}>{enhancementsError}</Text>
+              <Button title="Retry loading saved content" onPress={() => setEnhancementRetry((attempt) => attempt + 1)} variant="outline" />
+            </View>
+          )}
+          {!enhancementsLoading && !enhancementsError && savedEnhancements?.authoritySuggestions.map((suggestion) => (
+            <View key={suggestion.handle} style={{ gap: 4 }}>
+              <Text style={{ color: '#374151', fontWeight: '600' }}>
+                {suggestion.name} ({suggestion.handle}) · verified directory suggestion{suggestion.selected ? ' · selected for your editable draft' : ''}
+              </Text>
+              <Text style={{ color: '#6B7280' }}>{suggestion.matchReason}</Text>
+              {!!suggestion.profileUrl && (
+                <Text accessibilityRole="link" style={{ color: '#2563EB' }} onPress={() => void Linking.openURL(suggestion.profileUrl!)}>
+                  Open account profile
+                </Text>
+              )}
+              {!!suggestion.sourceUrl && (
+                <Text accessibilityRole="link" style={{ color: '#2563EB' }} onPress={() => void Linking.openURL(suggestion.sourceUrl!)}>
+                  Open listed verification source
+                </Text>
+              )}
+            </View>
+          ))}
+          {!enhancementsLoading && !enhancementsError && savedEnhancements?.generatedContents.map((generated, index) => (
+            <View key={`${generated.title}-${index}`} style={{ paddingTop: 8, borderTopWidth: 1, borderTopColor: '#E5E7EB', gap: 4 }}>
+              <Text style={{ color: '#1D4ED8', fontWeight: '600' }}>AI-generated draft {index + 1} · review before use</Text>
+              <Text style={{ color: '#374151', fontWeight: '600' }}>{generated.title}</Text>
+              <Text style={{ color: '#4B5563' }}>{generated.description}</Text>
+              <Text style={{ color: '#6B7280' }}>{generated.awareness_caption}</Text>
+              {generated.hashtags.length > 0 && <Text style={{ color: '#2563EB' }}>{generated.hashtags.join(' ')}</Text>}
+            </View>
+          ))}
+          {!enhancementsLoading && !enhancementsError
+            && !savedEnhancements?.authoritySuggestions.length
+            && !savedEnhancements?.generatedContents.length
+            && <Text style={{ color: '#6B7280' }}>No account suggestions or generated drafts were saved for this report.</Text>}
+        </View>
+      )}
 
       {/* Community Impact Section (PRD Section 5.4.2) */}
       <View style={styles.impactSection}>

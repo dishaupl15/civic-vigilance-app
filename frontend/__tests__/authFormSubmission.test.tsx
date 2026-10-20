@@ -79,7 +79,7 @@ describe('authentication form submission guards', () => {
     expect(screen.queryByText(/your account is not active/i)).toBeNull();
   });
 
-  test('does not claim signup succeeded when Supabase returns no session', async () => {
+  test('asks a user to confirm email when signup creates a user without a session', async () => {
     mockUseAuth.mockReturnValue({
       signUp: jest.fn().mockResolvedValue({
         data: { user: { identities: [{}] }, session: null },
@@ -94,9 +94,8 @@ describe('authentication form submission guards', () => {
       fireEvent.press(screen.getByText('Sign up'));
     });
 
-    expect(screen.getByText(/did not return an active session/i)).toBeTruthy();
-    expect(screen.queryByText(/check your email/i)).toBeNull();
-    expect(screen.queryByText(/verify your email/i)).toBeNull();
+    expect(screen.getByText(/Account created\. Check your email for a confirmation link/i)).toBeTruthy();
+    expect(screen.queryByText(/Signup did not establish an active session/i)).toBeNull();
   });
 
   test('shows a safe existing-account message without confirmation prompts', async () => {

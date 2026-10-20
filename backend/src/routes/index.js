@@ -3,6 +3,7 @@ const router = express.Router();
 const { analyzeImage } = require('../ai-analysis');
 const { generateReportContent, validateReportInput } = require('../report-content');
 const { deleteAccount, exportAccountData, requireSupabaseUser } = require('../supabase-admin');
+const xOAuthRouter = require('../x-oauth').createXOAuthRouter();
 
 const analysisAttempts = new Map();
 const contentAttempts = new Map();
@@ -43,6 +44,7 @@ router.get('/', (_req, res) => {
     res.json({ service: 'civic-vigilance-api', status: 'ok' });
 });
 router.get('/health', (_req, res) => res.json({ status: 'ok', service: 'civic-vigilance-api' }));
+router.use(xOAuthRouter);
 
 function requirePrivacyAcknowledgement(req, res, next) {
     if (req.body?.privacy_notice_accepted !== true) {

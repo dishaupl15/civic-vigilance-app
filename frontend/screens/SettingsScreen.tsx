@@ -9,8 +9,9 @@
  * - About & Legal
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ScrollView, View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Switch, Alert, ActivityIndicator, Share, Platform } from 'react-native';
+import * as Linking from 'expo-linking';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { saveProfile } from '../lib/profile';
@@ -18,13 +19,120 @@ import { useAuth } from '../hooks/useAuth';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { deleteCurrentAccount, exportCurrentAccount } from '../lib/accountApi';
 import { getBackend } from '../lib/backend';
+import { disconnectXConnection, getXConnection, startXConnection, XConnection } from '../lib/xConnectionApi';
 
 export default function SettingsScreen() {
   const navigation = useNavigation<any>();
 
   /* REAL BACKEND INTEGRATION */
-  const { profile, signOut, refreshProfile } = useAuth();
+  const { profile, signOut, refreshProfile, isGuest } = useAuth();
   const [isSaving, setIsSaving] = useState(false);
+  const [xConnection, setXConnection] = useState<XConnection | null>(null);
+  const [xConnectionLoading, setXConnectionLoading] = useState(true);
+  const [xConnectionBusy, setXConnectionBusy] = useState(false);
+  const [xConnectionError, setXConnectionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!profile?.uid || isGuest || getBackend() !== 'supabase' || !isSupabaseConfigured) {
+      setXConnectionLoading(false);
+      return undefined;
+    }
+    let active = true;
+    const refreshStatus = async () => {
+      try {
+        const connection = await getXConnection();
+        if (active) {
+          setXConnection(connection);
+          setXConnectionError(null);
+        }
+      } catch (error) {
+        if (active) {
+          setXConnectionError(error instanceof Error ? error.message : 'Could not load X account status.');
+        }
+      } finally {
+        if (active) setXConnectionLoading(false);
+      }
+    };
+    const onUrl = ({ url }: { url: string }) => {
+      try {
+        const callbackUrl = new URL(url);
+        if (callbackUrl.protocol === 'civicvigilance:'
+            && callbackUrl.hostname === 'oauth'
+            && callbackUrl.pathname === '/twitter'
+            && callbackUrl.searchParams.has('x_oauth')) {
+          const result = callbackUrl.searchParams.get('x_oauth');
+          const reason = callbackUrl.searchParams.get('reason');
+          void refreshStatus().then(() => {
+            if (result === 'connected') {
+              setXConnectionError(null);
+            } else if (result === 'error') {
+              setXConnectionError(reason === 'authorization_denied'
+                ? 'X authorization was canceled. Your account is not connected.'
+                : reason === 'account_already_linked'
+                  ? 'That X account is already linked to another Civic Vigilance account.'
+                  : 'X account connection failed. Please try again.');
+            }
+          });
+        }
+      } catch {
+        setXConnectionError('Could not verify the X account connection result.');
+      }
+    };
+    void refreshStatus();
+    const subscription = Linking.addEventListener('url', onUrl);
+    void Linking.getInitialURL().then((url) => {
+      if (active && url) onUrl({ url });
+    }).catch(() => {
+      if (active) setXConnectionError('Could not verify the X account connection result.');
+    });
+    return () => {
+      active = false;
+      subscription.remove();
+    };
+  }, [profile?.uid, isGuest]);
+
+  const handleConnectX = async () => {
+    if (isGuest || getBackend() !== 'supabase' || !isSupabaseConfigured) {
+      setXConnectionError('Sign in with an online account before connecting X.');
+      return;
+    }
+    setXConnectionBusy(true);
+    setXConnectionError(null);
+    try {
+      const authorizationUrl = await startXConnection();
+      await Linking.openURL(authorizationUrl);
+    } catch (error) {
+      setXConnectionError(error instanceof Error ? error.message : 'Could not start X authorization.');
+    } finally {
+      setXConnectionBusy(false);
+    }
+  };
+
+  const handleDisconnectX = () => {
+    Alert.alert(
+      'Disconnect X account?',
+      'Civic Vigilance will delete the saved connection credentials. You can connect again later.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Disconnect',
+          style: 'destructive',
+          onPress: async () => {
+            setXConnectionBusy(true);
+            setXConnectionError(null);
+            try {
+              await disconnectXConnection();
+              setXConnection({ connected: false, status: 'disconnected' });
+            } catch (error) {
+              setXConnectionError(error instanceof Error ? error.message : 'Could not disconnect the X account.');
+            } finally {
+              setXConnectionBusy(false);
+            }
+          },
+        },
+      ],
+    );
+  };
 
   // If no profile yet (loading), show loading skeleton
   if (!profile) {
@@ -215,6 +323,55 @@ export default function SettingsScreen() {
               trackColor={{ false: '#D1D5DB', true: '#2563EB' }}
             />
           </View>
+        </View>
+
+        {/* X Account */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Connected accounts</Text>
+          <View style={styles.settingRow}>
+            <View style={styles.settingLeft}>
+              <Ionicons name="logo-twitter" size={22} color="#1DA1F2" />
+              <View style={styles.settingText}>
+                <Text style={styles.settingLabel}>Twitter/X</Text>
+                {xConnectionLoading ? (
+                  <Text style={styles.settingSubtext}>Checking connection...</Text>
+                ) : xConnection?.connected ? (
+                  <Text style={styles.settingConnected}>Connected as @{xConnection.username}</Text>
+                ) : xConnection?.status === 'reauthorization_required' ? (
+                  <Text style={styles.settingDisconnected}>Reconnect @{xConnection.username} to continue</Text>
+                ) : (
+                  <Text style={styles.settingDisconnected}>Not connected</Text>
+                )}
+              </View>
+            </View>
+            {xConnectionLoading ? (
+              <ActivityIndicator color={Colors.primary} />
+            ) : xConnection?.connected ? (
+              <TouchableOpacity
+                onPress={handleDisconnectX}
+                disabled={xConnectionBusy}
+                accessibilityRole="button"
+                accessibilityLabel="Disconnect Twitter/X account"
+              >
+                {xConnectionBusy ? <ActivityIndicator color={Colors.error} /> : <Text style={styles.settingLabelDanger}>Disconnect</Text>}
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                onPress={handleConnectX}
+                disabled={xConnectionBusy}
+                accessibilityRole="button"
+                accessibilityLabel="Connect Twitter/X account"
+              >
+                {xConnectionBusy ? <ActivityIndicator color={Colors.primary} /> : <Text style={styles.settingLabel}>Connect</Text>}
+              </TouchableOpacity>
+            )}
+          </View>
+          {xConnectionError ? (
+            <Text accessibilityRole="alert" style={styles.settingError}>{xConnectionError}</Text>
+          ) : null}
+          <Text style={styles.settingSubtextBlock}>
+            Connecting verifies your X identity. Civic Vigilance will not publish posts automatically.
+          </Text>
         </View>
 
         {/* Privacy Settings */}
@@ -543,5 +700,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.textMuted,
     marginTop: 2,
+  },
+  settingError: {
+    ...Typography.caption,
+    color: Colors.error,
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.xs,
+  },
+  settingSubtextBlock: {
+    ...Typography.caption,
+    color: Colors.textMuted,
+    paddingHorizontal: Spacing.md,
+    paddingBottom: Spacing.md,
   },
 });

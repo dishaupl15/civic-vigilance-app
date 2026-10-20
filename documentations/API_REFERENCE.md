@@ -203,101 +203,22 @@ await castVote(issueId, 'downvote');
 
 ---
 
-### 6. Twitter APIs (Frontend)
+### 6. X Account Connection
 
-**File:** `lib/twitter.ts`
+The account-linking UI uses `lib/xConnectionApi.ts` and the authenticated
+Node.js API. Tokens are handled server-side; these endpoints do not publish
+posts.
 
-**Base URL:** Twitter OAuth 2.0 API
+| Method | Endpoint | Authentication | Purpose |
+|--------|----------|----------------|---------|
+| `POST` | `/api/x/connect` | Supabase bearer token | Start PKCE authorization for the authenticated user |
+| `GET` | `/api/x/connect/callback` | One-time OAuth state | Complete authorization and verify X identity |
+| `GET` | `/api/x/connection` | Supabase bearer token | Read the caller's safe connection status |
+| `DELETE` | `/api/x/connection` | Supabase bearer token | Disconnect the caller's X account |
 
-**Functions:**
-- Twitter OAuth connection
-- Tweet posting (when implemented)
-
----
-
-## 🚀 Backend APIs (Supabase Edge Functions)
-
-These are serverless functions deployed on Supabase that handle complex operations:
-
-### 1. Twitter Authentication
-
-**File:** `supabase/functions/twitter-auth/index.ts`
-
-**Endpoint:** `https://endrnbacxyjpxvgxhpjj.supabase.co/functions/v1/twitter-auth`
-
-**Method:** POST
-
-**Purpose:** Handle Twitter OAuth 2.0 authentication flow
-
-**Request Body:**
-```json
-{
-  "code": "twitter_oauth_code",
-  "userId": "user_uuid"
-}
-```
-
----
-
-### 2. Post Tweet (Civic Account)
-
-**File:** `supabase/functions/post-tweet-civic/index.ts`
-
-**Endpoint:** `https://endrnbacxyjpxvgxhpjj.supabase.co/functions/v1/post-tweet-civic`
-
-**Method:** POST
-
-**Purpose:** Post tweet from @CivicVigilance account
-
-**Request Body:**
-```json
-{
-  "text": "Tweet content",
-  "imageUrl": "https://...photo.jpg",
-  "issueId": "issue_uuid"
-}
-```
-
----
-
-### 3. Post Tweet (User Account)
-
-**File:** `supabase/functions/post-tweet-user/index.ts`
-
-**Endpoint:** `https://endrnbacxyjpxvgxhpjj.supabase.co/functions/v1/post-tweet-user`
-
-**Method:** POST
-
-**Purpose:** Post tweet from user's connected Twitter account
-
-**Request Body:**
-```json
-{
-  "text": "Tweet content",
-  "imageUrl": "https://...photo.jpg",
-  "issueId": "issue_uuid",
-  "userId": "user_uuid"
-}
-```
-
----
-
-### 4. Disconnect Twitter
-
-**File:** `supabase/functions/disconnect-twitter/index.ts`
-
-**Endpoint:** `https://endrnbacxyjpxvgxhpjj.supabase.co/functions/v1/disconnect-twitter`
-
-**Method:** POST
-
-**Purpose:** Disconnect user's Twitter account
-
-**Request Body:**
-```json
-{
-  "userId": "user_uuid"
-}
-```
+The legacy Supabase Edge Function Twitter endpoints documented in older
+versions of this file are retired; do not use them or send a client-supplied
+user ID as ownership proof. X post publishing is not implemented.
 
 ---
 

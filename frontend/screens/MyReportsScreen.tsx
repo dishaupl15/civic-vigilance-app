@@ -52,7 +52,10 @@ export default function MyReportsScreen({ navigation }: any) {
           .select('*,issue_metrics(upvotes,downvotes,comments,shares,twitter_impressions)')
           .eq('user_id', session.user.id)
           .order('created_at', { ascending: false });
-        if (queryError) throw new Error('Could not load your reports.');
+        if (queryError) {
+          const details = [queryError.code, queryError.message].filter(Boolean).join(': ');
+          throw new Error(details ? `Could not load your reports (${details}).` : 'Could not load your reports.');
+        }
         const reports = await Promise.all((rows ?? []).map(mapDatabaseIssueRow));
         if (active) setData(reports);
       } else {

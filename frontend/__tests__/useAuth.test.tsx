@@ -506,7 +506,10 @@ describe('Supabase auth context', () => {
       error: { message: 'Email not confirmed', status: 400 },
     });
     await expect(result.current.signIn('user@example.org', 'password'))
-      .resolves.toMatchObject({ error: expect.stringMatching(/verify your email/i) });
+      .resolves.toMatchObject({
+        error: 'Sign-in unsuccessful. Check your email and password, then try again.',
+        code: '400',
+      });
 
     mockSupabaseAuth.signInWithPassword.mockResolvedValue({
       error: { message: 'Invalid login credentials', status: 400 },
@@ -518,7 +521,7 @@ describe('Supabase auth context', () => {
   test('signs in with a confirmed account and adopts the Supabase auth session', async () => {
     mockSupabaseAuth.signInWithPassword.mockImplementation(async () => {
       mockAuthListener?.('SIGNED_IN', mockSession);
-      return { error: null };
+      return { data: { user: mockSession.user, session: mockSession }, error: null };
     });
     const { result } = await mountAuth();
 
@@ -534,5 +537,22 @@ describe('Supabase auth context', () => {
       id: 'user-123',
       email: 'user@example.org',
     });
+  });
+
+  test('does not report successful login when Supabase returns no session', async () => {
+    mockSupabaseAuth.signInWithPassword.mockResolvedValue({
+      data: { user: mockSession.user, session: null },
+      error: null,
+    });
+    const { result } = await mountAuth();
+
+    await act(async () => {
+      await expect(result.current.signIn('user@example.org', 'StrongPass1')).resolves.toMatchObject({
+        error: 'Sign-in did not establish an active session. Please try again.',
+        code: 'auth/no-session',
+      });
+    });
+
+    expect(result.current.session).toBeNull();
   });
 });

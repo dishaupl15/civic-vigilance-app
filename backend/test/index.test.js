@@ -1,5 +1,5 @@
 const http = require('http');
-const app = require('../src/app');
+const app = require('../api/[...path]');
 const { validateAnalysis } = require('../src/ai-analysis');
 const { parsePort } = require('../src/config');
 const {
@@ -46,6 +46,22 @@ test('GET /api/health returns machine-readable health', async () => {
   const response = await request('/api/health');
   expect(response.status).toBe(200);
   expect(JSON.parse(response.body)).toEqual({ status: 'ok', service: 'civic-vigilance-api' });
+});
+
+test.each([
+  ['POST', '/api/x/connect'],
+  ['GET', '/api/x/connection'],
+  ['DELETE', '/api/x/connection'],
+])('%s %s reaches the Express X route and requires authentication', async (method, path) => {
+  const response = await request(path, { method });
+  expect(response.status).toBe(401);
+  expect(JSON.parse(response.body).error).toMatch(/Authentication is required/);
+});
+
+test('GET /api/x/connect/callback reaches the Express OAuth callback', async () => {
+  const response = await request('/api/x/connect/callback?error=access_denied&state=invalid');
+  expect([302, 503]).toContain(response.status);
+  expect(response.status).not.toBe(404);
 });
 
 test('rejects an unapproved browser origin', async () => {

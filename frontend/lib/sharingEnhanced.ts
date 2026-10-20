@@ -49,7 +49,16 @@ export function composePostText(args: {
   }
 
   // Google Maps link
-  if (args.lat && args.lng) {
+  if (
+    typeof args.lat === 'number'
+    && Number.isFinite(args.lat)
+    && args.lat >= -90
+    && args.lat <= 90
+    && typeof args.lng === 'number'
+    && Number.isFinite(args.lng)
+    && args.lng >= -180
+    && args.lng <= 180
+  ) {
     parts.push(`🗺️ https://maps.google.com/?q=${args.lat},${args.lng}`);
   }
 
