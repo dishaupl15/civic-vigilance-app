@@ -442,6 +442,7 @@ export const SEED_COMMENTS: Array<Omit<Comment, 'id' | 'createdAt' | 'updatedAt'
   {
     reportId: '1',
     userId: 'user-002',
+    content: 'I also noticed this yesterday! Almost fell off my bike. Thanks for reporting!',
     text: 'I also noticed this yesterday! Almost fell off my bike. Thanks for reporting!',
     likes: 12,
     edited: false,
@@ -449,6 +450,7 @@ export const SEED_COMMENTS: Array<Omit<Comment, 'id' | 'createdAt' | 'updatedAt'
   {
     reportId: '1',
     userId: 'user-003',
+    content: 'This is exactly why we need better road maintenance. Has BBMP responded yet?',
     text: 'This is exactly why we need better road maintenance. Has BBMP responded yet?',
     likes: 8,
     edited: false,
@@ -456,6 +458,7 @@ export const SEED_COMMENTS: Array<Omit<Comment, 'id' | 'createdAt' | 'updatedAt'
   {
     reportId: '1',
     userId: 'test-user-001',
+    content: 'They acknowledged on Twitter but no action yet. Let\'s keep the pressure on!',
     text: 'They acknowledged on Twitter but no action yet. Let\'s keep the pressure on!',
     likes: 15,
     parentId: '2',
@@ -464,6 +467,7 @@ export const SEED_COMMENTS: Array<Omit<Comment, 'id' | 'createdAt' | 'updatedAt'
   {
     reportId: '2',
     userId: 'test-user-001',
+    content: 'This is a health hazard! BBMP should prioritize this.',
     text: 'This is a health hazard! BBMP should prioritize this.',
     likes: 23,
     edited: false,
@@ -471,6 +475,7 @@ export const SEED_COMMENTS: Array<Omit<Comment, 'id' | 'createdAt' | 'updatedAt'
   {
     reportId: '2',
     userId: 'user-003',
+    content: 'Same issue in our area. Seems like a city-wide problem.',
     text: 'Same issue in our area. Seems like a city-wide problem.',
     likes: 7,
     edited: false,
@@ -478,6 +483,7 @@ export const SEED_COMMENTS: Array<Omit<Comment, 'id' | 'createdAt' | 'updatedAt'
   {
     reportId: '4',
     userId: 'user-002',
+    content: 'HSR Layout drainage has been a problem for years. Finally someone is highlighting it!',
     text: 'HSR Layout drainage has been a problem for years. Finally someone is highlighting it!',
     likes: 34,
     edited: false,

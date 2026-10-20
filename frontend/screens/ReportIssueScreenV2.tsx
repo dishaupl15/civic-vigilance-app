@@ -15,7 +15,6 @@ import { TwitterPostingMethod, CategoryKey } from '../types';
 import { createIssue } from '../hooks/useIssues';
 import { uploadPhotos } from '../lib/storage';
 import { composePostText, shareToTwitter, showShareDialog } from '../lib/sharingEnhanced';
-import { getAuthorityHandles } from '../lib/smartAuthorities';
 import { clearReportDraft, saveReportDraft } from '../lib/reportDrafts';
 import * as Crypto from 'expo-crypto';
 
@@ -36,6 +35,7 @@ interface ReportData {
   locationAccuracy?: number;
   locationSource?: 'gps' | 'manual';
   locationConfirmed?: boolean;
+  selectedAuthorityHandles: string[];
   clientRequestId: string;
 
   // Stage 2
@@ -62,6 +62,7 @@ export default function ReportIssueScreenV2() {
     photos: [],
     coords: null,
     address: '',
+    selectedAuthorityHandles: [],
     clientRequestId: Crypto.randomUUID(),
   });
   const submitting = useRef(false);
@@ -88,8 +89,10 @@ export default function ReportIssueScreenV2() {
     description: string;
     address: string;
     coords: { lat: number; lng: number } | null;
+    locationAccuracy?: number;
     locationSource: 'gps' | 'manual';
     locationConfirmed: true;
+    selectedAuthorityHandles: string[];
   }) => {
     setReportData((current) => ({ ...current, ...data }));
     setCurrentStage(3);
@@ -131,7 +134,6 @@ export default function ReportIssueScreenV2() {
         reportData.clientRequestId,
         reportData.privacy === 'none'
       );
-      if (__DEV__) console.log('[Report] Photos uploaded:', photoUrls);
 
       // Step 2: Create issue in database
       if (__DEV__) console.log('[Report] Creating issue in database...');
@@ -151,25 +153,17 @@ export default function ReportIssueScreenV2() {
         privacy: reportData.privacy || 'none',
       });
 
-      if (__DEV__) console.log('[Report] Issue created:', issueData);
-
       // Step 3: Share to Twitter via deep link (if user chose Twitter sharing)
       let externalComposerOpened = false;
       if (reportData.privacy === 'twitter') {
         if (__DEV__) console.log('[Report] Opening Twitter for sharing...');
-        const authorities = getAuthorityHandles(
-          reportData.coords?.lat,
-          reportData.coords?.lng,
-          reportData.address,
-          reportData.category!
-        );
         const tweetText = composePostText({
           title: reportData.title!,
           description: reportData.description,
           address: reportData.address,
           lat: reportData.coords?.lat,
           lng: reportData.coords?.lng,
-          authorities,
+          authorities: reportData.selectedAuthorityHandles,
           category: reportData.category,
         });
         externalComposerOpened = await shareToTwitter({ text: tweetText });
@@ -231,6 +225,7 @@ export default function ReportIssueScreenV2() {
       photos: [],
       coords: null,
       address: '',
+      selectedAuthorityHandles: [],
       clientRequestId: Crypto.randomUUID(),
     });
     // @ts-ignore
@@ -274,6 +269,7 @@ export default function ReportIssueScreenV2() {
           category={reportData.category || 'other'}
           address={reportData.address}
           coords={reportData.coords}
+          selectedAuthorityHandles={reportData.selectedAuthorityHandles}
           privacy={reportData.privacy || 'twitter'}
           onSubmit={handleStage4Submit}
           onBack={() => handleBack(3)}

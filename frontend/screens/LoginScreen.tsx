@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, KeyboardAvoidingView, Platform, ScrollView, Image, Dimensions, SafeAreaView } from 'react-native';
 import { useAuth } from '../hooks/useAuth';
 import TextField from '../components/ui/TextField';
@@ -6,6 +6,7 @@ import Button from '../components/ui/Button';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Typography, Layout, BorderRadius, Shadows } from '../constants/DesignSystem';
 import { LinearGradient } from 'expo-linear-gradient'; // Ensure this is installed, otherwise fallback to View
+import { validateEmail } from '../lib/authValidation';
 
 const { height } = Dimensions.get('window');
 
@@ -15,12 +16,31 @@ export default function LoginScreen({ navigation }: any) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const submittingRef = useRef(false);
 
   const onSubmit = async () => {
+    const emailError = validateEmail(email);
+    if (emailError) {
+      setError(emailError);
+      return;
+    }
+    if (!password) {
+      setError('Password is required.');
+      return;
+    }
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setError(null);
     setLoading(true);
-    const res = await signIn(email, password);
-    setLoading(false);
-    if (res?.error) setError(res.error);
+    try {
+      const res = await signIn(email, password);
+      if (res?.error) setError(res.error);
+    } catch {
+      setError('Could not sign in. Check your connection and try again.');
+    } finally {
+      submittingRef.current = false;
+      setLoading(false);
+    }
   };
 
   return (
@@ -71,6 +91,7 @@ export default function LoginScreen({ navigation }: any) {
               keyboardType="email-address"
               value={email}
               onChangeText={setEmail}
+              editable={!loading}
               startIcon={<Ionicons name="mail-outline" size={20} color={Colors.textMuted} />}
             />
 
@@ -80,6 +101,7 @@ export default function LoginScreen({ navigation }: any) {
               secureTextEntry
               value={password}
               onChangeText={setPassword}
+              editable={!loading}
               startIcon={<Ionicons name="lock-closed-outline" size={20} color={Colors.textMuted} />}
             />
 

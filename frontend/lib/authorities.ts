@@ -7,8 +7,128 @@
  */
 
 import { supabase, isSupabaseConfigured } from './supabase';
-import { Authority, IssueCategory } from '../types';
+import { Authority, AuthorityJurisdictionType, IssueCategory, SocialPlatformHandle } from '../types';
 import { encodeGeohash } from './geohash';
+import { isIssueCategory } from './issueMapper';
+
+type Row = Record<string, unknown>;
+
+function asRow(value: unknown): Row | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Row
+    : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function requiredString(row: Row, key: string): string {
+  const value = asString(row[key]);
+  if (!value) throw new Error(`The authority response is missing ${key}.`);
+  return value;
+}
+
+function isJurisdictionType(value: unknown): value is AuthorityJurisdictionType {
+  return value === 'national' || value === 'state' || value === 'city' ||
+    value === 'ward' || value === 'department';
+}
+
+function parseAuthority(value: unknown): Authority {
+  const row = asRow(value);
+  if (!row) throw new Error('The authority response is not a valid database row.');
+  const jurisdictionType = row.jurisdiction_type;
+  const status = row.status;
+  if (!isJurisdictionType(jurisdictionType)) {
+    throw new Error('The authority response has an unsupported jurisdiction type.');
+  }
+  if (status !== 'active' && status !== 'inactive') {
+    throw new Error('The authority response has an unsupported status.');
+  }
+  const social = asRow(row.social_media);
+  const twitter = asRow(social?.twitter);
+  const whatsapp = asRow(social?.whatsapp);
+  const instagram = asRow(social?.instagram);
+  const facebook = asRow(social?.facebook);
+  const telegram = asRow(social?.telegram);
+  const telegramActive = typeof telegram?.active === 'boolean' ? telegram.active : undefined;
+  const contact = asRow(row.contact_info);
+  const response = asRow(row.response_metrics);
+  const geohashes = Array.isArray(row.geohashes)
+    ? row.geohashes.filter((item): item is string => typeof item === 'string')
+    : [];
+  const issueCategories = Array.isArray(row.issue_categories)
+    ? row.issue_categories.filter(isIssueCategory)
+    : [];
+  const createdAt = requiredString(row, 'created_at');
+  const updatedAt = asString(row.updated_at);
+  if (typeof row.jurisdiction_level !== 'number' || typeof row.priority !== 'number') {
+    throw new Error('The authority response is missing jurisdiction priority data.');
+  }
+
+  const mapPlatform = (platform: Row | undefined): SocialPlatformHandle | undefined => {
+    if (!platform) return undefined;
+    return {
+      handle: asString(platform.handle),
+      verified: typeof platform.verified === 'boolean' ? platform.verified : undefined,
+      active: typeof platform.active === 'boolean' ? platform.active : undefined,
+      lastChecked: asString(platform.last_checked) ? new Date(String(platform.last_checked)) : undefined,
+      url: asString(platform.url),
+    };
+  };
+  const socialMedia = social ? {
+    twitter: mapPlatform(twitter),
+    instagram: mapPlatform(instagram),
+    facebook: mapPlatform(facebook),
+    whatsapp: whatsapp ? {
+      number: asString(whatsapp.number),
+      businessVerified: typeof whatsapp.businessVerified === 'boolean' ? whatsapp.businessVerified : undefined,
+      active: typeof whatsapp.active === 'boolean' ? whatsapp.active : undefined,
+      lastChecked: asString(whatsapp.last_checked) ? new Date(String(whatsapp.last_checked)) : undefined,
+    } : undefined,
+    telegram: telegram && telegramActive !== undefined ? {
+      handle: asString(telegram.handle),
+      chatId: asString(telegram.chatId),
+      active: telegramActive,
+    } : undefined,
+  } : undefined;
+
+  return {
+    id: requiredString(row, 'id'),
+    name: requiredString(row, 'name'),
+    nameLocal: asString(row.name_local),
+    twitter: asString(twitter?.handle),
+    socialMedia,
+    jurisdiction: {
+      type: jurisdictionType,
+      level: row.jurisdiction_level,
+      country: requiredString(row, 'country'),
+      state: asString(row.state),
+      city: asString(row.city),
+      ward: typeof row.ward === 'number' ? row.ward : undefined,
+      zone: asString(row.zone),
+      geohashes,
+    },
+    issueCategories,
+    priority: row.priority,
+    contactInfo: contact ? {
+      email: asString(contact.email),
+      phone: asString(contact.phone),
+      tollFree: asString(contact.tollFree),
+      website: asString(contact.website),
+      mobileApp: asString(contact.mobileApp),
+    } : undefined,
+    responseMetrics: response ? {
+      averageResponseTime: typeof response.averageResponseTime === 'number' ? response.averageResponseTime : undefined,
+      totalIssuesAddressed: typeof response.totalIssuesAddressed === 'number' ? response.totalIssuesAddressed : undefined,
+      lastActive: asString(response.lastActive) ? new Date(String(response.lastActive)) : undefined,
+    } : undefined,
+    status,
+    verifiedBy: asString(row.verified_by),
+    createdAt: new Date(createdAt),
+    updatedAt: updatedAt ? new Date(updatedAt) : new Date(createdAt),
+  };
+}
 
 /**
  * Category to department mapping (from PDF)
@@ -94,70 +214,32 @@ export async function findAuthorities(params: {
   state?: string;
 }): Promise<Authority[]> {
   const { lat, lng, category, city, state } = params;
+  if (!isSupabaseConfigured) throw new Error('Authority lookup is unavailable because Supabase is not configured.');
 
-  try {
-    // Step 1: Calculate geohash from coordinates
-    const geohash = encodeGeohash(lat, lng, 8);
-    const geohashPrefix = geohash.substring(0, 6); // Use 6-char precision for matching
+  const geohash = encodeGeohash(lat, lng, 8);
+  const { data, error } = await supabase
+    .from('authorities')
+    .select('id,name,name_local,social_media,jurisdiction_type,jurisdiction_level,country,state,city,ward,zone,geohashes,issue_categories,priority,contact_info,response_metrics,status,verified_by,created_at,updated_at')
+    .eq('status', 'active')
+    .contains('issue_categories', [category]);
+  if (error) throw new Error('Could not load matching authorities.');
 
-    // Step 2: Query database for authorities
-    const authorities: Authority[] = [];
+  const candidates: Authority[] = (data ?? []).map((row: unknown) => parseAuthority(row));
+  const matching = candidates.filter((authority) => {
+    const geographicMatch = authority.jurisdiction.geohashes.some(
+      (prefix) => prefix.length > 0 && geohash.startsWith(prefix),
+    );
+    const cityMatch = Boolean(city) &&
+      authority.jurisdiction.type === 'city' &&
+      authority.jurisdiction.city?.toLocaleLowerCase() === city?.toLocaleLowerCase() &&
+      (!state || authority.jurisdiction.state?.toLocaleLowerCase() === state.toLocaleLowerCase());
+    return geographicMatch || cityMatch;
+  });
 
-    if (isSupabaseConfigured) {
-      // Query Supabase for authorities
-      // Priority 1: Ward-level match
-      const { data: wardData } = await supabase
-        .from('authorities')
-        .select('*')
-        .contains('geohashes', [geohashPrefix])
-        .contains('issue_categories', [category])
-        .eq('status', 'active')
-        .limit(5);
-
-      if (wardData) {
-        authorities.push(...(wardData as Authority[]));
-      }
-
-      // Priority 2: City-level match (if ward not found or need secondary)
-      if (city && authorities.length < 3) {
-        const { data: cityData } = await supabase
-          .from('authorities')
-          .select('*')
-          .eq('city', city)
-          .eq('jurisdiction_type', 'city')
-          .contains('issue_categories', [category])
-          .eq('status', 'active')
-          .limit(2);
-
-        if (cityData) {
-          cityData.forEach((auth: any) => {
-            if (!authorities.find((a) => a.id === auth.id)) {
-              authorities.push(auth as Authority);
-            }
-          });
-        }
-      }
-    }
-
-    // Fallback to sample data if no Supabase or no results
-    if (authorities.length === 0) {
-      // Use sample data for demonstration
-      const matchingAuthorities = SAMPLE_AUTHORITIES.filter((auth) => {
-        if (!auth.issueCategories) return false;
-        return auth.issueCategories.includes(category);
-      });
-
-      return matchingAuthorities.slice(0, 5) as Authority[];
-    }
-
-    // Sort by priority and return max 5
-    return authorities.sort((a, b) => (a.priority || 99) - (b.priority || 99)).slice(0, 5);
-  } catch (error) {
-    console.error('Error finding authorities:', error);
-
-    // Return fallback authorities
-    return SAMPLE_AUTHORITIES.slice(0, 3) as Authority[];
-  }
+  const unique = new Map(matching.map((authority) => [authority.id, authority]));
+  return [...unique.values()]
+    .sort((left, right) => left.priority - right.priority)
+    .slice(0, 5);
 }
 
 /**
@@ -173,19 +255,18 @@ export function suggestAuthorities(region?: string): string[] {
  */
 export async function getAuthorityMetrics(authorityId: string): Promise<Authority['metrics'] | null> {
   if (!isSupabaseConfigured) return null;
-
-  try {
-    const { data } = await supabase
-      .from('authorities')
-      .select('metrics')
-      .eq('id', authorityId)
-      .single();
-
-    return data?.metrics || null;
-  } catch (error) {
-    console.error('Error fetching authority metrics:', error);
-    return null;
-  }
+  const { data, error } = await supabase
+    .from('authorities')
+    .select('response_metrics')
+    .eq('id', authorityId)
+    .maybeSingle();
+  if (error) throw new Error('Could not load authority metrics.');
+  const metrics = asRow(data?.response_metrics);
+  if (!metrics) return null;
+  return {
+    averageResponseTime: typeof metrics.averageResponseTime === 'number' ? metrics.averageResponseTime : undefined,
+    totalIssuesAddressed: typeof metrics.totalIssuesAddressed === 'number' ? metrics.totalIssuesAddressed : undefined,
+  };
 }
 
 /**

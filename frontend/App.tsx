@@ -51,7 +51,9 @@ import PolicyScreen from './screens/PolicyScreen';
 import DebugScreen from './screens/DebugScreen';
 import TermsOfServiceScreen from './screens/TermsOfServiceScreen';
 import PrivacyPolicyScreen from './screens/PrivacyPolicyScreen';
+import UpdatePasswordScreen from './screens/UpdatePasswordScreen';
 import { AuthProvider, useAuth } from './hooks/useAuth';
+import Button from './components/ui/Button';
 
 const RootStack = createNativeStackNavigator();
 const FeedStack = createNativeStackNavigator();
@@ -113,6 +115,10 @@ const CustomTabBarButton = ({ children, onPress }: any) => (
 
 function AppTabs() {
   const { isGuest, signOut } = useAuth();
+  const signOutForLogin = async () => {
+    const result = await signOut();
+    if (result?.error) Alert.alert('Logout failed', result.error);
+  };
 
   return (
     <Tabs.Navigator
@@ -152,7 +158,7 @@ function AppTabs() {
             if (isGuest) {
               Alert.alert('Login Required', 'You need an account to report issues.', [
                 { text: 'Cancel', style: 'cancel' },
-                { text: 'Sign In', onPress: () => signOut() },
+                { text: 'Sign In', onPress: () => void signOutForLogin() },
               ]);
             } else {
               navigation.navigate('ReportModal'); // Open Modal instead
@@ -177,8 +183,25 @@ function AppTabs() {
 }
 
 function Root() {
-  const { session, profile, isLoading } = useAuth();
+  const {
+    session,
+    profile,
+    isLoading,
+    isPasswordRecovery,
+    authCallbackError,
+    clearAuthCallbackError,
+  } = useAuth();
   const scheme = useColorScheme();
+
+  if (authCallbackError) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Text style={styles.errorTitle}>Authentication link unavailable</Text>
+        <Text style={styles.errorText}>{authCallbackError}</Text>
+        <Button title="Continue to the app" onPress={clearAuthCallbackError} />
+      </View>
+    );
+  }
 
   if (isLoading) {
     return (
@@ -186,6 +209,20 @@ function Root() {
         <Text style={styles.loadingText}>Loading Civic Vigilance...</Text>
         <Text style={styles.loadingHint}>Initializing backend...</Text>
       </View>
+    );
+  }
+
+  if (isPasswordRecovery) {
+    return (
+      <NavigationContainer theme={scheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <RootStack.Navigator>
+          <RootStack.Screen
+            name="UpdatePassword"
+            component={UpdatePasswordScreen}
+            options={{ title: 'Update Password', headerShown: true }}
+          />
+        </RootStack.Navigator>
+      </NavigationContainer>
     );
   }
 

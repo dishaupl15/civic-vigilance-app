@@ -1,4 +1,5 @@
 import { isSupabaseConfigured, supabase } from './supabase';
+import { resolveNodeApiBaseUrl } from './nodeApiUrl';
 
 export type ImageAnalysis = {
   issue_category: string;
@@ -10,7 +11,7 @@ export type ImageAnalysis = {
 };
 
 export async function requestImageAnalysis(imageUrl: string, privacyNoticeAccepted: boolean): Promise<ImageAnalysis> {
-  const apiBase = process.env.EXPO_PUBLIC_NODE_API_URL;
+  const apiBase = resolveNodeApiBaseUrl(process.env.EXPO_PUBLIC_NODE_API_URL, __DEV__);
   if (!apiBase) throw new Error('Image analysis is not configured. Continue manually.');
   if (!isSupabaseConfigured) throw new Error('Sign in with the production service before requesting analysis.');
   if (!privacyNoticeAccepted) throw new Error('Review and accept the image-analysis privacy notice first.');

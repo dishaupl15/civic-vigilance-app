@@ -1,26 +1,28 @@
 import React, { useEffect, useState } from 'react';
 import { View, FlatList, StyleSheet, Text } from 'react-native';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { Issue } from '../types';
+import { IssueWithUserData } from '../types';
 import { useAuth } from '../hooks/useAuth';
 import { listUserIssues } from '../lib/sqliteIssues';
 import { getBackend } from '../lib/backend';
 
 import { Colors, Typography, Spacing } from '../constants/DesignSystem';
 import EnhancedIssueCard from '../components/EnhancedIssueCard';
+import { mapDatabaseIssueRow, mapLocalIssueRow } from '../lib/issueMapper';
 
 export default function MyReportsScreen({ navigation }: any) {
   const { session } = useAuth();
-  const [data, setData] = useState<Issue[]>([]);
-
-  // ... (useEffect remains similar but using setData(data || []) logic)
+  const [data, setData] = useState<IssueWithUserData[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let active = true;
     const load = async () => {
       if (!session?.user?.id) return;
 
-      // GUEST MODE DUMMY DATA
-      if (session.user.id === 'dummy-user-123') {
+      try {
+        setError(null);
+        if (session.user.id === 'dummy-user-123') {
         setData([{
           id: 'dummy-my-1',
           userId: 'dummy-user-123',
@@ -43,17 +45,25 @@ export default function MyReportsScreen({ navigation }: any) {
 
       if (getBackend() === 'sqlite') {
         const all = listUserIssues(Number(session.user.id));
-        setData(all as any);
+        if (active) setData(all.map(mapLocalIssueRow));
       } else if (isSupabaseConfigured) {
-        const { data } = await supabase
+        const { data: rows, error: queryError } = await supabase
           .from('issues') // actually reports in v2? check schema
-          .select('*')
+          .select('*,issue_metrics(upvotes,downvotes,comments,shares,twitter_impressions)')
           .eq('user_id', session.user.id)
           .order('created_at', { ascending: false });
-        setData((data as any) || []);
+        if (queryError) throw new Error('Could not load your reports.');
+        const reports = await Promise.all((rows ?? []).map(mapDatabaseIssueRow));
+        if (active) setData(reports);
+      } else {
+        throw new Error('Supabase is not configured.');
+      }
+      } catch (cause) {
+        if (active) setError(cause instanceof Error ? cause.message : 'Could not load your reports.');
       }
     };
-    load();
+    void load();
+    return () => { active = false; };
   }, [session?.user?.id]);
 
   const EmptyState = () => (
@@ -71,14 +81,15 @@ export default function MyReportsScreen({ navigation }: any) {
     <View style={styles.container}>
       <FlatList
         data={data}
-        keyExtractor={(it) => String((it as any).id)}
+        keyExtractor={(it) => it.id}
         renderItem={({ item }) => (
           <EnhancedIssueCard
-            item={item as any}
+            item={item}
             onPress={() => navigation.navigate('PostDetail', { id: item.id })}
           />
         )}
-        ListEmptyComponent={<EmptyState />}
+        ListHeaderComponent={error ? <Text accessibilityRole="alert" style={styles.message}>{error}</Text> : null}
+        ListEmptyComponent={error ? null : <EmptyState />}
         contentContainerStyle={data.length === 0 ? styles.centerContent : styles.listContent}
       />
     </View>

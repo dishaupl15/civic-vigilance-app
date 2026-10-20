@@ -35,10 +35,21 @@ export default function ProfileScreen({ navigation }: any) {
     setAvatar((updated as any).photoURL as string || (updated as any).avatar_url as string || uri);
   };
 
+  const performSignOut = async () => {
+    const result = await signOut();
+    if (result?.error) Alert.alert('Logout failed', result.error);
+  };
+
   const onLogout = () => {
     Alert.alert('Log out?', 'You will need to sign in again to report issues.', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Log out', style: 'destructive', onPress: () => signOut() }
+      {
+        text: 'Log out',
+        style: 'destructive',
+        onPress: async () => {
+          await performSignOut();
+        },
+      }
     ]);
   };
 
@@ -114,7 +125,7 @@ export default function ProfileScreen({ navigation }: any) {
 
         <View style={{ height: 24 }} />
         {isGuest ? (
-          <Button title="Sign In / Create Account" onPress={() => signOut()} variant="primary" />
+          <Button title="Sign In / Create Account" onPress={() => void performSignOut()} variant="primary" />
         ) : (
           <Button title="Log Out" onPress={onLogout} variant="danger" />
         )}

@@ -1,22 +1,24 @@
 import { useEffect, useState } from 'react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { getBackend } from '../lib/backend';
-import { Issue } from '../types';
+import { IssueWithUserData } from '../types';
 import { createIssueSqlite, listIssues as listIssuesSqlite, ensureSeedIssues } from '../lib/sqliteIssues';
 import { ensureSessionUserId } from '../lib/sqliteAuth';
 import { useAuth } from './useAuth';
-import { encodeGeohash } from '../lib/geohash';
-import { resolvePhotoUrls } from '../lib/storage';
+import { calculateDistance, encodeGeohash } from '../lib/geohash';
+import { mapDatabaseIssueRow, mapLocalIssueRow } from '../lib/issueMapper';
+import { validateReportLocation } from '../lib/reportValidation';
 
 type SortMode = 'trending' | 'newest' | 'nearby';
 
-export function useIssues(sort: SortMode, coords?: { lat: number; lng: number }) {
-  const [data, setData] = useState<Issue[]>([]);
+export function useIssues(sort: SortMode, coords?: { lat: number; lng: number } | null) {
+  const [data, setData] = useState<IssueWithUserData[]>([]);
   const [loading, setLoading] = useState(true);
-  const { session } = useAuth(); // Use context session which has the dummy user
+  const [error, setError] = useState<string | null>(null);
+  const { session } = useAuth();
 
   /* DUMMY DATA FOR GUEST MODE */
-  const DUMMY_ISSUES: Issue[] = [
+  const DUMMY_ISSUES: IssueWithUserData[] = [
     {
       id: 'dummy-1',
       userId: 'user-1',
@@ -89,14 +91,16 @@ export function useIssues(sort: SortMode, coords?: { lat: number; lng: number })
           sortedIssues.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
         } else if (sort === 'trending') {
           sortedIssues.sort((a, b) => (b.metrics?.upvotes || 0) - (a.metrics?.upvotes || 0));
-        } else if (sort === 'nearby' && coords) {
-          // Sort by mock distance (simply using the order they are defined as a proxy for now, 
-          // or could implement haversine if we wanted to be super fancy with dummy data)
-          sortedIssues.sort((a, b) => {
-            // Mock: Assume dummy-1 (Main St) is closest
-            if (a.id === 'dummy-1') return -1;
-            return 1;
-          });
+        } else if (sort === 'nearby') {
+          if (coords) {
+            const distance = (issue: IssueWithUserData) =>
+              issue.lat !== undefined && issue.lng !== undefined
+                ? calculateDistance(coords.lat, coords.lng, issue.lat, issue.lng)
+                : Number.POSITIVE_INFINITY;
+            sortedIssues.sort((a, b) => distance(a) - distance(b));
+          } else {
+            sortedIssues.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          }
         }
 
         setData(sortedIssues);
@@ -104,42 +108,58 @@ export function useIssues(sort: SortMode, coords?: { lat: number; lng: number })
         return;
       }
 
-      if (getBackend() === 'sqlite') {
-        const uid = await ensureSessionUserId();
-        ensureSeedIssues(uid);
-        const list = listIssuesSqlite(sort);
-        setData(list as any);
-      } else if (getBackend() === 'supabase' && isSupabaseConfigured) {
-        let query = supabase.from('issues').select('*');
+      try {
+        setError(null);
+        if (getBackend() === 'sqlite') {
+          const uid = await ensureSessionUserId();
+          ensureSeedIssues(uid);
+          const reports = listIssuesSqlite(sort === 'trending' ? sort : 'newest').map(mapLocalIssueRow);
+          if (sort === 'nearby' && coords) {
+            reports.sort((a, b) => {
+              const distance = (issue: IssueWithUserData) =>
+                issue.lat !== undefined && issue.lng !== undefined
+                  ? calculateDistance(coords.lat, coords.lng, issue.lat, issue.lng)
+                  : Number.POSITIVE_INFINITY;
+              return distance(a) - distance(b);
+            });
+          }
+          setData(reports);
+        } else if (getBackend() === 'supabase') {
+          if (!isSupabaseConfigured) throw new Error('Supabase is not configured.');
+          const { data: rows, error: queryError } = await supabase
+            .from('issues')
+            .select('*,issue_metrics(upvotes,downvotes,comments,shares,twitter_impressions)')
+            .order('created_at', { ascending: false })
+            .limit(100);
+          if (queryError) throw new Error('Could not load reports. Please try again.');
 
-        if (sort === 'newest') {
-          query = query.order('created_at', { ascending: false });
-        } else if (sort === 'trending') {
-          query = query.order('upvotes', { ascending: false });
-        } else if (sort === 'nearby' && coords) {
-          // Geoquery: Using geohash prefix match (PRD 5.3.1)
-          // Note: Real geohash query needs an RPC function or library logic, 
-          // for MVP we fetch recent and client-side filter or use Supabase PostGIS if enabled.
-          // Falling back to simple recency for simple nearby demo if RPC missing.
-          query = query.order('created_at', { ascending: false });
+          const reports = await Promise.all((rows ?? []).map(mapDatabaseIssueRow));
+          if (sort === 'trending') {
+            reports.sort((a, b) =>
+              (b.upvotes ?? 0) - (a.upvotes ?? 0) ||
+              (b.commentsCount ?? 0) - (a.commentsCount ?? 0) ||
+              new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+            );
+          } else if (sort === 'nearby' && coords) {
+            const distance = (issue: IssueWithUserData) =>
+              issue.lat !== undefined && issue.lng !== undefined
+                ? calculateDistance(coords.lat, coords.lng, issue.lat, issue.lng)
+                : Number.POSITIVE_INFINITY;
+            reports.sort((a, b) => distance(a) - distance(b));
+          }
+          setData(reports);
         }
-
-        const { data, error } = await query.limit(100);
-        if (!error && data) {
-          const issuesWithDisplayPhotos = await Promise.all(data.map(async (issue: any) => ({
-            ...issue,
-            photos: await resolvePhotoUrls(Array.isArray(issue.photos) ? issue.photos : []),
-          })));
-          setData(issuesWithDisplayPhotos as any);
-        }
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : 'Could not load reports.');
+        setData([]);
+      } finally {
+        setLoading(false);
       }
-
-      setLoading(false);
     };
-    run();
-  }, [sort, coords?.lat, coords?.lng]);
+    void run();
+  }, [sort, coords?.lat, coords?.lng, session?.user?.id]);
 
-  return { data, loading };
+  return { data, loading, error };
 }
 
 // Basic XSS sanitization for user input
@@ -165,13 +185,14 @@ export async function createIssue(payload: {
   location_source: 'gps' | 'manual';
   location_confirmed: boolean;
   privacy: 'twitter' | 'none';
-}) {
+}): Promise<IssueWithUserData> {
+  const title = payload.title.trim();
   // Input validation
-  if (!payload.title || payload.title.trim().length === 0) {
+  if (!title) {
     throw new Error('Title is required');
   }
-  if (payload.title.length > 100) {
-    throw new Error('Title must be 100 characters or less');
+  if (title.length < 10 || title.length > 100) {
+    throw new Error('Title must be between 10 and 100 characters.');
   }
   if (!payload.description || payload.description.trim().length === 0) {
     throw new Error('Description is required');
@@ -188,22 +209,21 @@ export async function createIssue(payload: {
     throw new Error('One to three uploaded photos are required');
   }
   if (!payload.address?.trim() || !payload.location_confirmed) throw new Error('A confirmed location is required');
-  const hasCoords = typeof payload.lat === 'number' && typeof payload.lng === 'number';
-  if (hasCoords && (payload.lat! < -90 || payload.lat! > 90 || payload.lng! < -180 || payload.lng! > 180)) {
-    throw new Error('Coordinates are outside valid ranges');
-  }
+  const locationError = validateReportLocation(payload.lat, payload.lng, payload.location_accuracy_m);
+  if (locationError) throw new Error(locationError);
+  const hasCoords = payload.lat !== undefined && payload.lng !== undefined;
 
   // Sanitize user-generated text content
   const sanitizedPayload = {
     ...payload,
-    title: sanitizeInput(payload.title.trim()),
+    title: sanitizeInput(title),
     description: sanitizeInput(payload.description.trim()),
     address: sanitizeInput(payload.address),
   };
 
   if (getBackend() === 'sqlite') {
     const localUserId = await ensureSessionUserId();
-    return await (createIssueSqlite({
+    const created = await createIssueSqlite({
       user_id: localUserId,
       title: sanitizedPayload.title,
       description: sanitizedPayload.description,
@@ -212,16 +232,20 @@ export async function createIssue(payload: {
       lat: sanitizedPayload.lat,
       lng: sanitizedPayload.lng,
       address: sanitizedPayload.address,
-    }) as any);
+    });
+    return mapLocalIssueRow(created);
   }
 
-  const { data: existing } = await supabase
+  if (!isSupabaseConfigured) throw new Error('Supabase is not configured.');
+  const issueSelect = '*,issue_metrics(upvotes,downvotes,comments,shares,twitter_impressions)';
+  const { data: existing, error: existingError } = await supabase
     .from('issues')
-    .select('*')
+    .select(issueSelect)
     .eq('client_request_id', sanitizedPayload.client_request_id)
     .eq('user_id', sanitizedPayload.user_id)
-    .single();
-  if (existing) return existing;
+    .maybeSingle();
+  if (existingError) throw new Error('Could not check whether this report was already submitted.');
+  if (existing) return mapDatabaseIssueRow(existing);
 
   const location = hasCoords ? `POINT(${sanitizedPayload.lng} ${sanitizedPayload.lat})` : null;
   const geohash = hasCoords ? encodeGeohash(sanitizedPayload.lat!, sanitizedPayload.lng!, 8) : '';
@@ -243,7 +267,7 @@ export async function createIssue(payload: {
     anonymous_username: 'Anonymous Citizen',
     status: 'pending',
   };
-  const { data, error } = await supabase.from('issues').insert(dbPayload).select('*').single();
+  const { data, error } = await supabase.from('issues').insert(dbPayload).select(issueSelect).single();
   if (error) throw error;
-  return data;
+  return mapDatabaseIssueRow(data);
 }

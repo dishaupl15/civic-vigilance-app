@@ -11,9 +11,11 @@ export async function reverseGeocode(lat: number, lng: number) {
     const results = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
     const r = results[0];
     if (!r) return '';
-    return `${r.name ?? ''} ${r.street ?? ''}, ${r.city ?? ''}, ${r.region ?? ''} ${r.postalCode ?? ''}`.trim();
+    return [r.name, r.street, r.district, r.city, r.region, r.postalCode]
+      .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
+      .map((part) => part.trim())
+      .join(', ');
   } catch {
     return '';
   }
 }
-

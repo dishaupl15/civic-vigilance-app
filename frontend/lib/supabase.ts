@@ -23,6 +23,7 @@ if (isSupabaseConfigured) {
       storage: AsyncStorage as any,
       autoRefreshToken: true,
       persistSession: true,
+      flowType: 'pkce',
       detectSessionInUrl: false
     }
   });
@@ -43,6 +44,10 @@ if (isSupabaseConfigured) {
       signInWithPassword: noop,
       signUp: noop,
       resetPasswordForEmail: noop,
+      exchangeCodeForSession: noop,
+      verifyOtp: noop,
+      setSession: noop,
+      updateUser: noop,
       signOut: async () => ok(null),
       refreshSession: async () => ok(null)
     },

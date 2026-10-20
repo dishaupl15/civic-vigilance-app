@@ -11,21 +11,38 @@ import { Alert } from 'react-native';
 export default function IssueCard({ item, onPress }: { item: IssueWithUserData; onPress?: () => void }) {
   const { isGuest, signOut } = useAuth();
   const [vote, setVote] = useState<-1 | 0 | 1>(0);
+  const [voteLoading, setVoteLoading] = useState(true);
+  const [voteSubmitting, setVoteSubmitting] = useState(false);
   const [up, setUp] = useState(item.upvotes ?? 0);
   const [down, setDown] = useState(item.downvotes ?? 0);
+  const signOutForLogin = async () => {
+    const result = await signOut();
+    if (result?.error) Alert.alert('Logout failed', result.error);
+  };
 
   useEffect(() => {
-    getUserVote(item.id).then(setVote).catch(() => { });
+    let active = true;
+    getUserVote(item.id).then((result) => {
+      if (!active) return;
+      setVote(result.status === 'ready' ? result.vote : 0);
+    }).catch(() => {
+      if (active) Alert.alert('Vote unavailable', 'Could not load your vote. Please try again.');
+    }).finally(() => {
+      if (active) setVoteLoading(false);
+    });
+    return () => { active = false; };
   }, [item.id]);
 
   const onVote = async (val: -1 | 1) => {
+    if (voteLoading || voteSubmitting) return;
     if (isGuest) {
       Alert.alert('Login Required', 'You need an account to vote on issues.', [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Sign In', onPress: () => signOut() },
+        { text: 'Sign In', onPress: () => void signOutForLogin() },
       ]);
       return;
     }
+    setVoteSubmitting(true);
     const prev = vote;
     // optimistic update
     if (val === 1) {
@@ -42,7 +59,15 @@ export default function IssueCard({ item, onPress }: { item: IssueWithUserData; 
       if (typeof res.upvotes === 'number') setUp(res.upvotes);
       if (typeof res.downvotes === 'number') setDown(res.downvotes);
       setVote(res.vote);
-    } catch { /* keep optimistic values */ }
+      if (res.warning) Alert.alert('Vote saved', res.warning);
+    } catch (cause) {
+      setVote(prev);
+      setUp(item.upvotes ?? 0);
+      setDown(item.downvotes ?? 0);
+      Alert.alert('Vote not saved', cause instanceof Error ? cause.message : 'Please try again.');
+    } finally {
+      setVoteSubmitting(false);
+    }
   };
 
   const onShare = async () => {

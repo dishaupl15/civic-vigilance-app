@@ -1,7 +1,8 @@
 import { supabase, isSupabaseConfigured } from './supabase';
+import { resolveNodeApiBaseUrl } from './nodeApiUrl';
 
 async function authenticatedRequest(path: string, init?: RequestInit) {
-  const apiBase = process.env.EXPO_PUBLIC_NODE_API_URL;
+  const apiBase = resolveNodeApiBaseUrl(process.env.EXPO_PUBLIC_NODE_API_URL, __DEV__);
   if (!apiBase) throw new Error('The account service is not configured.');
   if (!isSupabaseConfigured) throw new Error('Supabase is not configured.');
   const { data } = await supabase.auth.getSession();

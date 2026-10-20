@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, Image, TouchableOpacity, Linking } from 'react-native';
+import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, Image, TouchableOpacity, Linking, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { Comment, IssueWithUserData } from '../types';
-import { getIssueByIdSqlite, listCommentsSqlite, addCommentSqlite, castVoteSqlite, getUserVoteSqlite } from '../lib/sqliteIssues';
+import { getIssueByIdSqlite, listCommentsSqlite, addCommentSqlite } from '../lib/sqliteIssues';
 import ActionBar from '../components/ActionBar';
 import { castVote, getUserVote } from '../lib/votes';
 import { useAuth } from '../hooks/useAuth';
@@ -12,6 +12,7 @@ import { getBackend } from '../lib/backend';
 import { formatCount, getTimeAgo } from '../lib/format';
 import { CATEGORY_EMOJIS } from '../components/CategoryPicker';
 import { showShareDialog, composePostText } from '../lib/sharingEnhanced';
+import { mapDatabaseCommentRow, mapDatabaseIssueRow, mapLocalCommentRow, mapLocalIssueRow } from '../lib/issueMapper';
 
 export default function PostDetailScreen({ route }: any) {
   const { id } = route.params as { id: string };
@@ -20,17 +21,29 @@ export default function PostDetailScreen({ route }: any) {
   const [content, setContent] = useState('');
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [vote, setVote] = useState<-1 | 0 | 1>(0);
+  const [voteLoading, setVoteLoading] = useState(true);
+  const [voteSubmitting, setVoteSubmitting] = useState(false);
+  const [voteError, setVoteError] = useState<string | null>(null);
   const [up, setUp] = useState(0);
   const [down, setDown] = useState(0);
+  const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const [commentError, setCommentError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const { session, isGuest, signOut } = useAuth();
-  const localUserId = Number((session as any)?.user?.id || 1);
+  const localUserId = Number(session?.user?.id || 1);
+  const signOutForLogin = async () => {
+    const result = await signOut();
+    if (result?.error) Alert.alert('Logout failed', result.error);
+  };
 
   useEffect(() => {
+    let active = true;
     const run = async () => {
-      // GUEST MODE CHECK
-      if (id.startsWith('dummy-')) {
+      try {
+        setLoadError(null);
+        if (id.startsWith('dummy-')) {
         // Mock data for dummy issues
-        const dummyIssue = {
+        const dummyIssue: IssueWithUserData = {
           id,
           userId: 'user-1',
           title: id === 'dummy-1' ? 'Pothole on Main St causing traffic' : (id === 'dummy-2' ? 'Overflowing Garbage Bin' : 'Broken Streetlight'),
@@ -38,6 +51,7 @@ export default function PostDetailScreen({ route }: any) {
             ? 'Large pothole in the middle lane causing severe slowdowns during rush hour. Several cars have been damaged.'
             : 'The garbage bin at the market entrance has been overflowing for 3 days. Foul smell and attracting stray animals.',
           category: id === 'dummy-1' ? 'pothole' : (id === 'dummy-2' ? 'garbage' : 'streetlight'),
+          photos: [],
           imageUrl: id === 'dummy-1'
             ? 'https://images.unsplash.com/photo-1515162816999-a0c47dc192f7?auto=format&fit=crop&q=80&w=800'
             : (id === 'dummy-2' ? 'https://images.unsplash.com/photo-1530587191325-3db32d826c18?auto=format&fit=crop&q=80&w=800' : 'https://images.unsplash.com/photo-1555677284-6a6f9716399a?auto=format&fit=crop&q=80&w=800'),
@@ -50,41 +64,77 @@ export default function PostDetailScreen({ route }: any) {
           tweetUrl: 'https://twitter.com/CivicVigilance/status/1234567890'
         };
 
-        const dummyComments = [
-          { id: 'c1', issue_id: id, userId: 'u2', content: 'I saw this too! It\'s getting worse.', createdAt: new Date().toISOString(), anonymousUsername: 'Neighbor_Jane' },
-          { id: 'c2', issue_id: id, userId: 'u3', content: 'Has anyone reported this to the council?', createdAt: new Date().toISOString(), anonymousUsername: 'Concerned_Dad', parentId: null },
-          { id: 'c3', issue_id: id, userId: 'u4', content: 'Yes, I tagged them on Twitter.', createdAt: new Date().toISOString(), anonymousUsername: 'Citizen_One', parentId: 'c2' },
-          { id: 'c4', issue_id: id, userId: 'u5', content: 'Good job!', createdAt: new Date().toISOString(), anonymousUsername: 'Local_Hero', parentId: 'c3' },
+        const dummyComments: Comment[] = [
+          { id: 'c1', reportId: id, userId: 'u2', content: 'I saw this too! It\'s getting worse.', createdAt: new Date(), edited: false },
+          { id: 'c2', reportId: id, userId: 'u3', content: 'Has anyone reported this to the council?', createdAt: new Date(), edited: false },
+          { id: 'c3', reportId: id, userId: 'u4', content: 'Yes, I tagged them on Twitter.', createdAt: new Date(), edited: false, parentId: 'c2' },
+          { id: 'c4', reportId: id, userId: 'u5', content: 'Good job!', createdAt: new Date(), edited: false, parentId: 'c3' },
         ];
 
-        setIssue(dummyIssue as any);
-        setComments(dummyComments as any);
-        setUp(dummyIssue.metrics.upvotes);
-        setDown((dummyIssue.metrics as any).downvotes);
+        if (!active) return;
+        setIssue(dummyIssue);
+        setComments(dummyComments);
+        setUp(dummyIssue.metrics?.upvotes ?? 0);
+        setDown(dummyIssue.metrics?.downvotes ?? 0);
         return;
       }
 
       if (getBackend() === 'sqlite') {
-        const i = await getIssueByIdSqlite(Number(id));
-        setIssue(i as any);
-        const c = await listCommentsSqlite(Number(id));
-        setComments(c as any);
-        setUp((i as any)?.upvotes ?? 0); setDown((i as any)?.downvotes ?? 0);
-      } else if (isSupabaseConfigured) {
-        const { data } = await supabase.from('issues').select('*').eq('id', id).single();
-        setIssue(data as any);
-        const { data: c } = await supabase.from('comments').select('*').eq('issue_id', id).order('created_at', { ascending: true });
-        setComments((c as any) || []);
-        setUp((data as any)?.upvotes ?? 0); setDown((data as any)?.downvotes ?? 0);
+        const localIssue = mapLocalIssueRow(getIssueByIdSqlite(Number(id)));
+        const localComments = listCommentsSqlite(Number(id)).map(mapLocalCommentRow);
+        if (!active) return;
+        setIssue(localIssue);
+        setComments(localComments);
+        setUp(localIssue.upvotes ?? 0);
+        setDown(localIssue.downvotes ?? 0);
+      } else {
+        if (!isSupabaseConfigured) throw new Error('Supabase is not configured.');
+        const { data, error } = await supabase
+          .from('issues')
+          .select('*,issue_metrics(upvotes,downvotes,comments,shares,twitter_impressions)')
+          .eq('id', id)
+          .single();
+        if (error) throw new Error('Could not load this report.');
+        const mappedIssue = await mapDatabaseIssueRow(data);
+        const { data: commentRows, error: commentsError } = await supabase
+          .from('comments')
+          .select('*')
+          .eq('issue_id', id)
+          .order('created_at', { ascending: true });
+        if (commentsError) throw new Error('Could not load comments for this report.');
+        const mappedComments = (commentRows ?? []).map(mapDatabaseCommentRow);
+        if (!active) return;
+        setIssue(mappedIssue);
+        setComments(mappedComments);
+        setUp(mappedIssue.upvotes ?? 0);
+        setDown(mappedIssue.downvotes ?? 0);
+      }
+      } catch (cause) {
+        if (active) setLoadError(cause instanceof Error ? cause.message : 'Could not load this report.');
       }
     };
-    run();
+    void run();
+    return () => { active = false; };
   }, [id]);
 
   useEffect(() => {
-    if (!isSupabaseConfigured) {
-      try { setVote(getUserVoteSqlite(Number(id), localUserId)); } catch { }
-    } else { getUserVote(id).then(setVote).catch(() => { }); }
+    let active = true;
+    setVoteLoading(true);
+    getUserVote(id).then((result) => {
+      if (!active) return;
+      if (result.status === 'ready') setVote(result.vote);
+      else setVote(0);
+      if (result.status === 'unauthenticated') {
+        setVoteError('Sign in to vote on this report.');
+      } else if (result.status === 'unconfigured') {
+        setVoteError('Voting is unavailable because Supabase is not configured.');
+      }
+    }).catch(() => {
+      if (active) Alert.alert('Vote unavailable', 'Could not load your vote. Please try again.');
+    }).finally(() => {
+      if (active) setVoteLoading(false);
+    });
+    return () => { active = false; };
   }, [id, localUserId]);
 
   const addComment = useCallback(async () => {
@@ -92,36 +142,74 @@ export default function PostDetailScreen({ route }: any) {
       import('react-native').then(({ Alert }) => {
         Alert.alert('Login Required', 'You need an account to post comments.', [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Sign In', onPress: () => signOut() },
+          { text: 'Sign In', onPress: () => void signOutForLogin() },
         ]);
       });
       return;
     }
-    if (!content.trim()) return;
-
-    if (getBackend() === 'sqlite') {
-      const c = await addCommentSqlite(Number(id), localUserId, content, replyTo ? Number(replyTo) : undefined);
-      setComments((prev) => [...prev, c as any]);
-    } else if (isSupabaseConfigured) {
-      const { data, error } = await supabase.from('comments').insert({ issue_id: id, content, parent_id: replyTo }).select('*').single();
-      if (!error && data) setComments((prev) => [...prev, data as any]);
+    const trimmedContent = content.trim();
+    if (!trimmedContent) return;
+    if (!session?.user?.id) {
+      setCommentError('Sign in before posting a comment.');
+      return;
     }
 
-    setContent('');
-    setReplyTo(null);
-  }, [content, id, replyTo, localUserId]);
+    setCommentSubmitting(true);
+    setCommentError(null);
+    let commentSaved = false;
+    try {
+      if (getBackend() === 'sqlite') {
+        addCommentSqlite(Number(id), localUserId, trimmedContent, replyTo ? Number(replyTo) : undefined);
+        commentSaved = true;
+        setContent('');
+        setReplyTo(null);
+        setComments(listCommentsSqlite(Number(id)).map(mapLocalCommentRow));
+      } else {
+        if (!isSupabaseConfigured) throw new Error('Supabase is not configured.');
+        const commentPayload = {
+          issue_id: id,
+          user_id: session.user.id,
+          content: trimmedContent,
+          ...(replyTo ? { parent_id: replyTo } : {}),
+        };
+        const { error } = await supabase.from('comments').insert(commentPayload);
+        if (error) throw new Error('Your comment could not be saved. Please try again.');
+        commentSaved = true;
+        setContent('');
+        setReplyTo(null);
+
+        const { data: rows, error: refreshError } = await supabase
+          .from('comments')
+          .select('*')
+          .eq('issue_id', id)
+          .order('created_at', { ascending: true });
+        if (refreshError) throw new Error('Your comment was saved, but the comment list could not be refreshed.');
+        setComments((rows ?? []).map(mapDatabaseCommentRow));
+      }
+      setContent('');
+      setReplyTo(null);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Your comment could not be saved.';
+      setCommentError(message);
+      Alert.alert(commentSaved ? 'Comment saved' : 'Comment not sent', message);
+    } finally {
+      setCommentSubmitting(false);
+    }
+  }, [content, id, replyTo, localUserId, session?.user?.id, isGuest, signOut]);
 
   const onVote = async (val: -1 | 1) => {
     if (isGuest) {
       import('react-native').then(({ Alert }) => {
         Alert.alert('Login Required', 'You need an account to vote on issues.', [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Sign In', onPress: () => signOut() },
+          { text: 'Sign In', onPress: () => void signOutForLogin() },
         ]);
       });
       return;
     }
+    if (voteSubmitting || voteLoading) return;
     const prev = vote;
+    setVoteSubmitting(true);
     if (val === 1) {
       if (prev === 1) { setVote(0); setUp(Math.max(0, up - 1)); }
       else if (prev === -1) { setVote(1); setDown(Math.max(0, down - 1)); setUp(up + 1); }
@@ -132,11 +220,18 @@ export default function PostDetailScreen({ route }: any) {
       else { setVote(-1); setDown(down + 1); }
     }
     try {
-      const res = isSupabaseConfigured ? await castVote(id, val) : await castVoteSqlite(Number(id), localUserId, val as any);
+      const res = await castVote(id, val);
       if (typeof res.upvotes === 'number') setUp(res.upvotes);
       if (typeof res.downvotes === 'number') setDown(res.downvotes);
       setVote(res.vote);
-    } catch { /* ignore */ }
+    } catch (cause) {
+      setVote(prev);
+      setUp(issue?.upvotes ?? up);
+      setDown(issue?.downvotes ?? down);
+      Alert.alert('Vote not saved', cause instanceof Error ? cause.message : 'Please try again.');
+    } finally {
+      setVoteSubmitting(false);
+    }
   };
 
   // Memoize expensive computations
@@ -168,8 +263,8 @@ export default function PostDetailScreen({ route }: any) {
   }, [id, issue]);
 
   const tree = useMemo(() => {
-    const map = new Map<string, any[]>();
-    const roots: any[] = [];
+    const map = new Map<string, Comment[]>();
+    const roots: Comment[] = [];
     comments.forEach(c => { map.set(c.id, []); });
     comments.forEach(c => {
       if (c.parentId) {
@@ -179,7 +274,7 @@ export default function PostDetailScreen({ route }: any) {
         roots.push(c);
       }
     });
-    function renderNode(c: any, level = 0) {
+    function renderNode(c: Comment, level = 0): React.ReactNode {
       const maxNestLevel = 5; // PRD: 5-level nesting max
       const actualLevel = Math.min(level, maxNestLevel);
 
@@ -194,7 +289,7 @@ export default function PostDetailScreen({ route }: any) {
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
             <Ionicons name="person-circle-outline" size={16} color="#6B7280" />
             <Text style={{ fontWeight: '600', color: '#4B5563', marginLeft: 4, fontSize: 14 }}>
-              {(c as any).anonymousUsername || 'Anonymous_Citizen'}
+              Citizen
             </Text>
             <Text style={{ color: '#9CA3AF', marginLeft: 8, fontSize: 12 }}>
               {c.createdAt ? getTimeAgo(c.createdAt) : 'just now'}
@@ -207,7 +302,7 @@ export default function PostDetailScreen({ route }: any) {
                 import('react-native').then(({ Alert }) => {
                   Alert.alert('Login Required', 'You need an account to reply.', [
                     { text: 'Cancel', style: 'cancel' },
-                    { text: 'Sign In', onPress: () => signOut() },
+                    { text: 'Sign In', onPress: () => void signOutForLogin() },
                   ]);
                 });
                 return;
@@ -229,7 +324,9 @@ export default function PostDetailScreen({ route }: any) {
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFFFFF' }}>
         <Ionicons name="alert-circle-outline" size={64} color="#D1D5DB" />
         <Text style={{ fontSize: 18, fontWeight: '600', color: '#6B7280', marginTop: 16 }}>Issue not found</Text>
-        <Text style={{ fontSize: 14, color: '#9CA3AF', marginTop: 8 }}>This issue may have been removed or is unavailable.</Text>
+        <Text style={{ fontSize: 14, color: '#9CA3AF', marginTop: 8 }}>
+          {loadError || 'This issue may have been removed or is unavailable.'}
+        </Text>
       </View>
     );
   }
@@ -345,11 +442,11 @@ export default function PostDetailScreen({ route }: any) {
       <View style={styles.actionBar}>
         {/* Vote Pill */}
         <View style={styles.votePill}>
-          <Pressable onPress={() => onVote(1)} style={styles.pillBtn} hitSlop={8}>
+          <Pressable onPress={() => onVote(1)} style={styles.pillBtn} hitSlop={8} disabled={voteLoading || voteSubmitting}>
             <Ionicons name={vote === 1 ? 'arrow-up' : 'arrow-up-outline'} size={20} color={vote === 1 ? '#FF4500' : '#E0E0E0'} />
           </Pressable>
           <Text style={[styles.voteCount, vote !== 0 && styles.voteCountActive]}>{formatCount(up)}</Text>
-          <Pressable onPress={() => onVote(-1)} style={styles.pillBtn} hitSlop={8}>
+          <Pressable onPress={() => onVote(-1)} style={styles.pillBtn} hitSlop={8} disabled={voteLoading || voteSubmitting}>
             <Ionicons name={vote === -1 ? 'arrow-down' : 'arrow-down-outline'} size={20} color={vote === -1 ? '#7193FF' : '#E0E0E0'} />
           </Pressable>
         </View>
@@ -363,6 +460,8 @@ export default function PostDetailScreen({ route }: any) {
 
       {/* Comments Section */}
       <View style={styles.commentsSection}>
+        {voteError && <Text accessibilityRole="alert" style={styles.errorText}>{voteError}</Text>}
+        {commentError && <Text accessibilityRole="alert" style={styles.errorText}>{commentError}</Text>}
         <Text style={styles.sectionTitle}>
           Comments ({comments.length})
         </Text>
@@ -400,8 +499,8 @@ export default function PostDetailScreen({ route }: any) {
           />
           <Pressable
             onPress={addComment}
-            style={[styles.sendButton, !content.trim() && styles.sendButtonDisabled]}
-            disabled={!content.trim()}
+            style={[styles.sendButton, (!content.trim() || commentSubmitting) && styles.sendButtonDisabled]}
+            disabled={!content.trim() || commentSubmitting}
           >
             <Ionicons name="send" size={20} color={content.trim() ? '#2563EB' : '#D1D5DB'} />
           </Pressable>
@@ -618,6 +717,11 @@ const styles = StyleSheet.create({
   shareText: { display: 'none' },
   commentsSection: {
     padding: 16,
+  },
+  errorText: {
+    color: '#B91C1C',
+    fontSize: 14,
+    marginBottom: 8,
   },
   commentsTree: {
     marginTop: 12,

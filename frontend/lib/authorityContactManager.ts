@@ -28,63 +28,65 @@ export function getAuthorityContactOptions(authority: Authority): ContactOption[
   const options: ContactOption[] = [];
 
   // Twitter
-  if (authority.socialMedia?.twitter?.active) {
+  if (authority.socialMedia?.twitter?.active && authority.socialMedia.twitter.handle) {
     const twitter = authority.socialMedia.twitter;
     options.push({
       platform: 'twitter',
       label: `Twitter: ${twitter.handle || 'N/A'}`,
       value: twitter.handle || '',
       icon: 'logo-twitter',
-      verified: twitter.verified,
-      active: twitter.active,
+      verified: twitter.verified === true,
+      active: true,
       action: () => openTwitterProfile(twitter),
     });
   }
 
   // WhatsApp
-  if (authority.socialMedia?.whatsapp?.active) {
+  const whatsappNumber = authority.socialMedia?.whatsapp?.number;
+  if (authority.socialMedia?.whatsapp?.active && whatsappNumber) {
     const whatsapp = authority.socialMedia.whatsapp;
     options.push({
       platform: 'whatsapp',
-      label: `WhatsApp: ${formatPhoneNumber(whatsapp.number)}`,
-      value: whatsapp.number,
+      label: `WhatsApp: ${formatPhoneNumber(whatsappNumber)}`,
+      value: whatsappNumber,
       icon: 'logo-whatsapp',
-      verified: whatsapp.businessVerified,
-      active: whatsapp.active,
-      action: () => openWhatsApp(whatsapp.number),
+      verified: whatsapp.businessVerified === true,
+      active: true,
+      action: () => openWhatsApp(whatsappNumber),
     });
   }
 
   // Instagram
-  if (authority.socialMedia?.instagram?.active) {
+  if (authority.socialMedia?.instagram?.active && authority.socialMedia.instagram.handle) {
     const instagram = authority.socialMedia.instagram;
     options.push({
       platform: 'instagram',
       label: `Instagram: ${instagram.handle || 'N/A'}`,
       value: instagram.handle || '',
       icon: 'logo-instagram',
-      verified: instagram.verified,
-      active: instagram.active,
+      verified: instagram.verified === true,
+      active: true,
       action: () => openInstagramProfile(instagram),
     });
   }
 
   // Facebook
-  if (authority.socialMedia?.facebook?.active) {
+  if (authority.socialMedia?.facebook?.active && authority.socialMedia.facebook.handle) {
     const facebook = authority.socialMedia.facebook;
     options.push({
       platform: 'facebook',
       label: `Facebook: ${facebook.handle || 'N/A'}`,
       value: facebook.handle || '',
       icon: 'logo-facebook',
-      verified: facebook.verified,
-      active: facebook.active,
+      verified: facebook.verified === true,
+      active: true,
       action: () => openFacebookProfile(facebook),
     });
   }
 
   // Telegram
-  if (authority.socialMedia?.telegram?.active) {
+  if (authority.socialMedia?.telegram?.active &&
+      (authority.socialMedia.telegram.handle || authority.socialMedia.telegram.chatId)) {
     const telegram = authority.socialMedia.telegram;
     options.push({
       platform: 'telegram',
@@ -92,7 +94,7 @@ export function getAuthorityContactOptions(authority: Authority): ContactOption[
       value: telegram.handle || telegram.chatId || '',
       icon: 'paper-plane',
       verified: false,
-      active: telegram.active,
+      active: true,
       action: () => openTelegram(telegram.handle, telegram.chatId),
     });
   }

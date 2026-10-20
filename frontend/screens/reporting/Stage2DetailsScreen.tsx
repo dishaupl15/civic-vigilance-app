@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Image,
@@ -17,6 +17,8 @@ import Button from '../../components/ui/Button';
 import CategoryPicker, { CategoryKey } from '../../components/CategoryPicker';
 import { BorderRadius, Colors, Shadows, Typography } from '../../constants/DesignSystem';
 import { parseOptionalCoordinates } from '../../lib/reportValidation';
+import { getAuthorityRecommendations } from '../../lib/authorityRecommendations';
+import ReportAiAssistance from '../../components/reporting/ReportAiAssistance';
 
 interface Props {
   photos: string[];
@@ -29,8 +31,10 @@ interface Props {
     description: string;
     address: string;
     coords: { lat: number; lng: number } | null;
+    locationAccuracy?: number;
     locationSource: 'gps' | 'manual';
     locationConfirmed: true;
+    selectedAuthorityHandles: string[];
   }) => void;
   onBack: () => void;
 }
@@ -43,24 +47,42 @@ export default function Stage2DetailsScreen({ photos, initialAddress, coords, ac
   const [editingLocation, setEditingLocation] = useState(!initialAddress);
   const [latitude, setLatitude] = useState(coords ? String(coords.lat) : '');
   const [longitude, setLongitude] = useState(coords ? String(coords.lng) : '');
+  const parsedCoordinates = parseOptionalCoordinates(latitude, longitude);
+  const currentCoords = parsedCoordinates.coordinates;
+  const [selectedAuthorityHandles, setSelectedAuthorityHandles] = useState<string[]>([]);
+  const recommendations = useMemo(
+    () => getAuthorityRecommendations(currentCoords?.lat, currentCoords?.lng, address, category),
+    [currentCoords?.lat, currentCoords?.lng, address, category]
+  );
+  useEffect(() => {
+    const availableHandles = new Set(recommendations.accounts.map((authority) => authority.handle));
+    setSelectedAuthorityHandles((current) => current.filter((handle) => availableHandles.has(handle)));
+  }, [recommendations.accounts]);
+  const gpsCoordinatesUnchanged = !!coords
+    && currentCoords?.lat === coords.lat
+    && currentCoords?.lng === coords.lng;
 
   const handleContinue = () => {
-    if (!title.trim()) return Alert.alert('Title Required', 'Please enter a short factual title.');
+    const normalizedTitle = title.trim();
+    if (normalizedTitle.length < 10 || normalizedTitle.length > 100) {
+      return Alert.alert('Title Length', 'Enter a factual title between 10 and 100 characters.');
+    }
     if (!description.trim()) return Alert.alert('Description Required', 'Describe the visible civic issue.');
     if (!address.trim()) return Alert.alert('Location Required', 'Confirm the detected address or enter it manually.');
 
-    const parsed = parseOptionalCoordinates(latitude, longitude);
-    if (parsed.error) return Alert.alert('Invalid Coordinates', parsed.error);
-    const confirmedCoords = parsed.coordinates;
-    const unchangedGps = !!coords && confirmedCoords?.lat === coords.lat && confirmedCoords?.lng === coords.lng;
+    if (parsedCoordinates.error) return Alert.alert('Invalid Coordinates', parsedCoordinates.error);
     onContinue({
-      title: title.trim(),
+      title: normalizedTitle,
       category,
       description: description.trim(),
       address: address.trim(),
-      coords: confirmedCoords,
-      locationSource: unchangedGps ? 'gps' : 'manual',
+      coords: currentCoords,
+      locationAccuracy: gpsCoordinatesUnchanged ? accuracy : undefined,
+      locationSource: gpsCoordinatesUnchanged ? 'gps' : 'manual',
       locationConfirmed: true,
+      selectedAuthorityHandles: selectedAuthorityHandles.filter((handle) =>
+        recommendations.accounts.some((authority) => authority.handle === handle)
+      ),
     });
   };
 
@@ -71,7 +93,7 @@ export default function Stage2DetailsScreen({ photos, initialAddress, coords, ac
       water_supply: 'Water supply issue', sewage: 'Sewage issue', traffic_signal: 'Traffic signal issue',
       encroachment: 'Possible encroachment', stray_animals: 'Stray animal issue', parks: 'Park maintenance issue', other: 'Civic issue',
     };
-    setTitle(`${labels[category]} near ${place}`.slice(0, 80));
+    setTitle(`${labels[category]} near ${place}`.slice(0, 100));
   };
 
   return (
@@ -82,8 +104,8 @@ export default function Stage2DetailsScreen({ photos, initialAddress, coords, ac
         </ScrollView>
 
         <View style={styles.card}>
-          <View style={styles.cardHeader}><Text style={styles.sectionTitle}>Title</Text><Text style={styles.charCount}>{title.length}/80</Text></View>
-          <TextInput style={styles.input} placeholder="Short factual title" value={title} onChangeText={setTitle} maxLength={80} />
+          <View style={styles.cardHeader}><Text style={styles.sectionTitle}>Title</Text><Text style={styles.charCount}>{title.trim().length}/100</Text></View>
+          <TextInput style={styles.input} placeholder="Short factual title (10–100 characters)" value={title} onChangeText={setTitle} maxLength={100} />
           <Pressable onPress={suggestTitle}><Text style={styles.link}>Suggest from category and location</Text></Pressable>
         </View>
 
@@ -96,6 +118,15 @@ export default function Stage2DetailsScreen({ photos, initialAddress, coords, ac
           <View style={styles.cardHeader}><Text style={styles.sectionTitle}>Visible details</Text><Text style={styles.charCount}>{description.length}/500</Text></View>
           <TextInput style={[styles.input, styles.textArea]} placeholder="Describe only what you observed" value={description} onChangeText={setDescription} maxLength={500} multiline />
         </View>
+
+        <ReportAiAssistance
+          title={title}
+          category={category}
+          description={description}
+          onUseTitle={setTitle}
+          onUseDescription={setDescription}
+          onUseCategory={setCategory}
+        />
 
         <View style={styles.card}>
           <View style={styles.cardHeader}>
@@ -111,11 +142,86 @@ export default function Stage2DetailsScreen({ photos, initialAddress, coords, ac
               </View>
             </>
           ) : <Text style={styles.address}>{address}</Text>}
-          <Text style={styles.meta}>{coords ? `GPS detected${accuracy ? `, accuracy ±${Math.round(accuracy)}m` : ''}` : 'GPS unavailable; this address will be marked as manually confirmed'}</Text>
-          <Pressable disabled={!coords} style={[styles.mapLink, !coords && { opacity: 0.45 }]} onPress={() => coords && Linking.openURL(`https://maps.google.com/?q=${coords.lat},${coords.lng}`)}>
+          <Text style={styles.meta}>
+            {!currentCoords
+              ? 'No GPS coordinates; this address is manually confirmed'
+              : !gpsCoordinatesUnchanged
+                ? 'Coordinates entered manually'
+                : accuracy !== undefined
+                  ? `GPS coordinates, accuracy ±${Math.round(accuracy)}m`
+                  : 'GPS coordinates; accuracy unavailable'}
+          </Text>
+          <Pressable
+            disabled={!currentCoords}
+            style={[styles.mapLink, !currentCoords && { opacity: 0.45 }]}
+            onPress={() => {
+              if (currentCoords) {
+                void Linking.openURL(`https://maps.google.com/?q=${currentCoords.lat},${currentCoords.lng}`)
+                  .catch(() => Alert.alert('Map Unavailable', 'Could not open the map. You can still submit the confirmed location.'));
+              }
+            }}
+          >
             <Ionicons name="map-outline" size={16} color={Colors.primary} />
-            <Text style={styles.link}>{coords ? 'Review detected pin on map' : 'No detected map pin'}</Text>
+            <Text style={styles.link}>
+              {currentCoords ? 'Review report pin on map' : 'No map pin available'}
+            </Text>
           </Pressable>
+        </View>
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Authority account suggestions</Text>
+          <Text style={styles.meta}>
+            Optional suggestions only. Confirm any account on its official website.
+            Civic Vigilance does not contact or notify them. Selected handles are only included in the X draft if you choose external sharing.
+          </Text>
+          {recommendations.accounts.map((authority) => {
+            const selected = selectedAuthorityHandles.includes(authority.handle);
+            const sourceUrl = authority.sourceUrl;
+            return (
+              <View key={authority.handle} style={styles.authoritySuggestion}>
+                <Pressable
+                  accessibilityRole="checkbox"
+                  accessibilityLabel={`Select ${authority.name} account ${authority.handle}`}
+                  accessibilityState={{ checked: selected }}
+                  onPress={() => setSelectedAuthorityHandles((current) => selected
+                    ? current.filter((handle) => handle !== authority.handle)
+                    : [...current, authority.handle])}
+                  style={styles.authoritySelection}
+                >
+                  <Text style={styles.authorityCheckbox}>{selected ? '☑' : '□'}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.address}>{authority.name} ({authority.handle})</Text>
+                    <Text style={styles.meta}>Verified directory entry · {authority.matchReason}</Text>
+                  </View>
+                </Pressable>
+                {sourceUrl && (
+                  <View style={styles.authoritySource}>
+                    <Text
+                      accessibilityRole="link"
+                      style={styles.link}
+                      onPress={() => {
+                        void Linking.openURL(sourceUrl).catch(() =>
+                          Alert.alert('Website Unavailable', 'Could not open the listed source website.')
+                        );
+                      }}
+                    >
+                      Listed source website (not independently verified)
+                    </Text>
+                  </View>
+                )}
+              </View>
+            );
+          })}
+          {recommendations.accounts.length === 0 && (
+            <Text style={styles.meta}>
+              {recommendations.unverifiedDirectoryMatches
+                ? 'Possible local directory matches could not be independently verified, so specific accounts are withheld.'
+                : 'No verified account match is available. No account identity has been inferred.'}
+            </Text>
+          )}
+          <Text style={styles.fieldLabel}>Department-level ideas (general guidance, not verified contacts)</Text>
+          {recommendations.departments.map((department) => (
+            <Text key={department} style={styles.meta}>• {department}</Text>
+          ))}
         </View>
         <View style={{ height: 110 }} />
       </ScrollView>
@@ -141,6 +247,11 @@ const styles = StyleSheet.create({
   link: { marginTop: 8, fontSize: 14, color: Colors.primary, fontWeight: '600' },
   address: { fontSize: 15, color: Colors.textMain, fontWeight: '600' },
   meta: { marginTop: 8, fontSize: 12, color: Colors.textSecondary },
+  authoritySuggestion: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  authoritySelection: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  authoritySource: { paddingLeft: 30 },
+  authorityCheckbox: { color: Colors.primary, fontSize: 20 },
+  fieldLabel: { color: Colors.textMain, fontWeight: '600', marginTop: 12, marginBottom: 4 },
   coordinateRow: { flexDirection: 'row', gap: 8 },
   coordinateInput: { flex: 1, fontSize: 13 },
   mapLink: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6 },

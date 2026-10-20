@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -17,6 +17,7 @@ import TextField from '../components/ui/TextField';
 import Button from '../components/ui/Button';
 import { BorderRadius, Colors, Shadows, Spacing, Typography } from '../constants/DesignSystem';
 import { getBackend } from '../lib/backend';
+import { validateEmail, validateNewPassword } from '../lib/authValidation';
 
 export default function SignupScreen() {
   const { signUp } = useAuth();
@@ -26,29 +27,35 @@ export default function SignupScreen() {
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const submittingRef = useRef(false);
 
   const onSubmit = async () => {
-    if (!email.trim()) return setError('Email is required');
-    if (password.length < 8) return setError('Password should be at least 8 characters');
-    if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(password)) {
-      return setError('Password must include uppercase, lowercase, and a number');
-    }
-    if (password !== confirm) return setError('Passwords do not match');
+    const emailError = validateEmail(email);
+    if (emailError) return setError(emailError);
+    const passwordError = validateNewPassword(password, confirm);
+    if (passwordError) return setError(passwordError);
 
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setIsLoading(true);
     setError(null);
     try {
       const res = await signUp(email.trim(), password);
       if (res?.error) {
         setError(res.error);
+      } else if (res?.data?.user && Array.isArray(res.data.user.identities) && res.data.user.identities.length === 0) {
+        setError('An account with this email already exists. Try signing in or resetting your password.');
       } else if (!res?.data?.session) {
         Alert.alert(
-          'Account Created',
-          'Please check your email to verify your account before logging in.',
+          'Check your email',
+          'Open the Supabase verification email on this device. The link will return you to Civic Vigilance; you can then sign in if you are not signed in automatically.',
           [{ text: 'OK', onPress: () => navigation.goBack() }]
         );
       }
+    } catch {
+      setError('Could not create your account. Check your connection and try again.');
     } finally {
+      submittingRef.current = false;
       setIsLoading(false);
     }
   };

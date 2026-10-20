@@ -48,7 +48,18 @@ export default function Stage1CameraScreen({ onContinue, onCancel }: Props) {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [camPermission, requestCamPermission] = useCameraPermissions();
   const cameraRef = useRef<any>(null);
-  const { coords, address, accuracy, loading: locationLoading, error: locationError, requestLocation } = useLiveLocation();
+  const {
+    coords,
+    address,
+    accuracy,
+    permissionStatus,
+    canAskAgain,
+    loading: locationLoading,
+    error: locationError,
+    requestLocation,
+    openLocationSettings,
+  } = useLiveLocation();
+  const permissionBlocked = permissionStatus === 'denied' && !canAskAgain;
 
   const ensureCameraPermission = async () => {
     if (camPermission?.granted) return true;
@@ -169,7 +180,7 @@ export default function Stage1CameraScreen({ onContinue, onCancel }: Props) {
       {/* GPS Overlay Header - PRD 5.2 Stage 1 */}
       <View style={styles.headerOverlay}>
         <View style={styles.headerContent}>
-          <Text style={styles.headerTitle}>📍 LIVE LOCATION</Text>
+          <Text style={styles.headerTitle}>📍 REPORT LOCATION</Text>
 
           <View style={styles.locationBadge}>
             {address ? (
@@ -184,27 +195,33 @@ export default function Stage1CameraScreen({ onContinue, onCancel }: Props) {
           <View style={styles.coordsRow}>
             {coords && (
               <Text style={styles.headerCoords}>
-                {coords.lat.toFixed(5)}°N, {coords.lng.toFixed(5)}°E
+                {Math.abs(coords.lat).toFixed(5)}°{coords.lat < 0 ? 'S' : 'N'}, {Math.abs(coords.lng).toFixed(5)}°{coords.lng < 0 ? 'W' : 'E'}
               </Text>
             )}
-            {accuracy && (
+            {accuracy !== undefined && (
               <View style={[styles.accuracyBadge, accuracy > 100 ? styles.accuracyPoor : styles.accuracyGood]}>
                 <Text style={styles.accuracyText}>±{Math.round(accuracy)}m</Text>
               </View>
             )}
           </View>
 
-          {accuracy && accuracy > 100 && (
+          {accuracy !== undefined && accuracy > 100 && (
             <View style={styles.warningContainer}>
               <Ionicons name="warning" size={12} color="#FCD34D" />
               <Text style={styles.warningText}> Poor Signal</Text>
             </View>
           )}
-          {!coords && (
-            <Pressable onPress={() => void requestLocation()} disabled={locationLoading} style={styles.locationAction}>
-              <Text style={styles.locationActionText}>{locationLoading ? 'Locating...' : 'Use current location'}</Text>
-            </Pressable>
-          )}
+          <Pressable
+            onPress={() => void (permissionBlocked ? openLocationSettings() : requestLocation())}
+            disabled={locationLoading}
+            style={styles.locationAction}
+            accessibilityRole="button"
+          >
+            <Text style={styles.locationActionText}>
+              {locationLoading ? 'Locating...' : permissionBlocked ? 'Open location settings' : coords ? 'Refresh location' : 'Use current location'}
+            </Text>
+          </Pressable>
+          <Text style={styles.locationPrivacyNote}>Used only for this report. You can enter the address manually.</Text>
           {!!locationError && <Text style={styles.warningText}>{locationError}</Text>}
         </View>
       </View>
@@ -409,6 +426,11 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '700',
+  },
+  locationPrivacyNote: {
+    color: '#D1D5DB',
+    fontSize: 11,
+    marginTop: 6,
   },
   cameraStatus: {
     position: 'absolute',

@@ -144,9 +144,9 @@ export interface Report {
 // Social platform contact information
 export interface SocialPlatformHandle {
   handle?: string; // @handle or username
-  verified: boolean;
-  active: boolean;
-  lastChecked: Date;
+  verified?: boolean;
+  active?: boolean;
+  lastChecked?: Date;
   url?: string; // Full profile URL
 }
 
@@ -163,10 +163,10 @@ export interface Authority {
   socialMedia?: {
     twitter?: SocialPlatformHandle;
     whatsapp?: {
-      number: string; // Format: +91XXXXXXXXXX
-      businessVerified: boolean;
-      active: boolean;
-      lastChecked: Date;
+      number?: string; // Format: +91XXXXXXXXXX
+      businessVerified?: boolean;
+      active?: boolean;
+      lastChecked?: Date;
     };
     instagram?: SocialPlatformHandle;
     facebook?: SocialPlatformHandle;
@@ -226,12 +226,13 @@ export interface Comment {
   id: string;
   reportId: string;
   userId: string;
-  text: string;
-  likes: number;
+  content: string;
+  text?: string;
+  likes?: number;
   parentId?: string;
   createdAt: Date;
   updatedAt?: Date;
-  edited: boolean;
+  edited?: boolean;
 }
 
 export interface Vote {
@@ -291,15 +292,36 @@ export interface PendingTwitterPost {
 export type Issue = Report;
 
 // Extended Issue type with optional display properties from joined data
-export interface IssueWithUserData extends Omit<Report, 'createdAt'> {
+export interface IssueWithUserData {
+  id: string;
+  userId: string;
+  title: string;
+  description?: string;
+  category: IssueCategory;
+  photos: string[];
+  location?: {
+    lat?: number;
+    lng?: number;
+    address?: string;
+    geohash?: string;
+  };
+  privacy?: TwitterPostingMethod;
+  authorities?: string[];
+  tweetId?: string;
+  tweetUrl?: string;
+  status?: PostingStatus;
+  anonymousUsername?: string;
+  metrics?: Partial<Report['metrics']>;
+  moderation?: Report['moderation'];
+  updatedAt?: Date | string;
   isVerified?: boolean; // From user join
   commentsCount?: number; // Computed field
   shares?: number; // From metrics or computed
   upvotes?: number; // From metrics.upvotes
   downvotes?: number; // From metrics.downvotes
   imageUrl?: string; // First photo from photos array
-  address?: string; // From location.address
-  lat?: number; // From location.lat
-  lng?: number; // From location.lng
+  address?: string;
+  lat?: number;
+  lng?: number;
   createdAt: Date | string; // Can be string from database
 }

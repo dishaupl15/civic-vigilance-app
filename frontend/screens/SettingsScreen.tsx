@@ -86,8 +86,8 @@ export default function SettingsScreen() {
           text: 'Logout',
           style: 'destructive',
           onPress: async () => {
-            await signOut();
-            // Navigation to Auth handled by App.tsx logic
+            const result = await signOut();
+            if (result?.error) Alert.alert('Logout failed', result.error);
           },
         },
       ]
@@ -107,10 +107,18 @@ export default function SettingsScreen() {
             try {
               if (getBackend() === 'supabase' && isSupabaseConfigured) {
                 await deleteCurrentAccount();
-                await signOut();
+                const signOutResult = await signOut();
+                if (signOutResult?.error) {
+                  Alert.alert(
+                    'Account deleted',
+                    'Your account was deleted, but we could not confirm logout. Please close the app and sign in again if needed.',
+                  );
+                  return;
+                }
                 Alert.alert('Account Deleted', 'Your account and associated application data were permanently deleted.');
               } else {
-                await signOut();
+                const signOutResult = await signOut();
+                if (signOutResult?.error) Alert.alert('Logout failed', signOutResult.error);
               }
             } catch {
               Alert.alert('Error', 'Failed to delete account. Please email support@civicvigilance.com for assistance.');

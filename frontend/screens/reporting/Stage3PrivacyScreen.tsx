@@ -80,7 +80,7 @@ export default function Stage3PrivacyScreen({ onContinue, onBack, defaultMethod 
         <View style={styles.featureList}>
           <View style={styles.featureRow}>
             <Ionicons name="checkmark-circle" size={20} color="#34D399" />
-            <Text style={styles.featureText}>Authorities tagged automatically</Text>
+            <Text style={styles.featureText}>Only selected account suggestions appear in your editable draft</Text>
           </View>
           <View style={styles.featureRow}>
             <Ionicons name="checkmark-circle" size={20} color="#34D399" />

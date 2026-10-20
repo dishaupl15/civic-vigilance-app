@@ -1,11 +1,34 @@
 import { createComplaintDraft } from '../lib/complaintDraft';
-import { isValidCoordinate, parseOptionalCoordinates, validateEvidencePhotos } from '../lib/reportValidation';
+import { isValidCoordinate, parseOptionalCoordinates, validateEvidencePhotos, validateReportLocation } from '../lib/reportValidation';
 
 describe('reporting reliability', () => {
   test('rejects invalid coordinates without inventing a fallback', () => {
     expect(isValidCoordinate(91, 10)).toBe(false);
     expect(parseOptionalCoordinates('', '').coordinates).toBeNull();
+    expect(parseOptionalCoordinates('19.07', '')).toEqual({
+      coordinates: null,
+      error: 'Enter both latitude and longitude, or leave both blank.',
+    });
+    expect(parseOptionalCoordinates('', '72.87')).toEqual({
+      coordinates: null,
+      error: 'Enter both latitude and longitude, or leave both blank.',
+    });
+    expect(parseOptionalCoordinates(' ', '72.87')).toEqual({
+      coordinates: null,
+      error: 'Enter both latitude and longitude, or leave both blank.',
+    });
     expect(parseOptionalCoordinates('19.07', '72.87').coordinates).toEqual({ lat: 19.07, lng: 72.87 });
+  });
+
+  test('validates report coordinate pairs and accuracy metadata', () => {
+    expect(validateReportLocation(19.07, 72.87, 18)).toBeNull();
+    expect(validateReportLocation(undefined, undefined)).toBeNull();
+    expect(validateReportLocation(Number.NaN, 72.87)).toBe('Coordinates are outside valid ranges');
+    expect(validateReportLocation(19.07, undefined)).toBe('Latitude and longitude must be provided together');
+    expect(validateReportLocation(19.07, 72.87, Number.POSITIVE_INFINITY))
+      .toBe('Location accuracy must be a non-negative finite number and requires coordinates');
+    expect(validateReportLocation(undefined, undefined, 18))
+      .toBe('Location accuracy must be a non-negative finite number and requires coordinates');
   });
 
   test('requires one to three genuine evidence references', () => {

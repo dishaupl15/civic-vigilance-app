@@ -35,48 +35,36 @@ This guide will help you set up Supabase as the backend for your CivicVigilance 
 1. In your Supabase dashboard, click **SQL Editor** (left sidebar)
 2. Click "New query"
 
-### 2.2 Run Migration Scripts (IN ORDER!)
+### 2.2 Reconcile and Apply Database Migrations
 
-#### A. Initial Schema (001_initial_schema.sql)
-1. Open `supabase/migrations/001_initial_schema.sql` from your project
-2. Copy the ENTIRE contents
-3. Paste into Supabase SQL Editor
-4. Click **RUN** (bottom right)
-5. ✅ You should see: "Success. No rows returned"
+The repository contains migrations `001_initial_schema.sql` through
+`010_issue_location_integrity.sql` under `backend/supabase/migrations/`.
+Migration 010 is a proposed, unapplied constraint migration for issue
+coordinates and accuracy; it is not proof that the constraints exist remotely.
+The earlier migrations create and evolve the tables, foreign keys, triggers,
+RLS policies, and storage configuration used by the current application.
 
-**What this does:**
-- Creates all tables (users, issues, votes, comments, authorities, etc.)
-- Enables PostGIS for geospatial queries
-- Creates indexes for performance
-- Sets up triggers for auto-updating timestamps
-- Creates helper functions for nearby queries
+**Local migration files do not prove that any migration has been applied to
+your Supabase project.** Before changing a project that already contains data:
 
-#### B. Row Level Security (002_row_level_security.sql)
-1. Open `supabase/migrations/002_row_level_security.sql`
-2. Copy all contents
-3. Paste into a NEW query in SQL Editor
-4. Click **RUN**
-5. ✅ You should see: "Success. No rows returned"
+1. In Supabase Dashboard, open **Database → Migrations** and compare the
+   project's migration history with the local migration files. Review migration
+   010 against the remote schema and run its read-only data preflight before
+   deciding whether it is safe to apply.
+2. If SQL was previously pasted into SQL Editor, verify the actual tables,
+   columns, constraints, policies, triggers, and buckets too; manually applied
+   SQL may not appear in the migration history.
+3. Back up the project and review the proposed migration plan against its
+   existing schema and data. Migration `006_optimize_schema.sql` includes
+   orphan-row cleanup, and later migrations alter RLS and storage policies.
+4. Apply only migrations confirmed to be pending, in numeric order, using the
+   team's reviewed migration workflow. Do not paste all files blindly, rerun
+   migration SQL, or reset a production database.
 
-**What this does:**
-- Enables RLS on all tables (security!)
-- Creates policies so users can only access their own data
-- Allows public viewing of active issues
-- Sets up storage policies for image uploads
-
-#### C. Seed Authorities (003_seed_authorities.sql)
-1. Open `supabase/migrations/003_seed_authorities.sql`
-2. Copy all contents
-3. Paste into a NEW query in SQL Editor
-4. Click **RUN**
-5. ✅ You should see: "Success. Rows affected: 15" (or similar)
-
-**What this does:**
-- Populates authorities table with real Indian civic bodies
-- Includes BBMP, Mumbai BMC, Delhi MCD, Chennai Corporation, etc.
-- Sets up Twitter handles, phone numbers, geohash coverage
-
----
+For a new, empty project, use the same reviewed migration workflow from
+`backend/` and verify the resulting schema before configuring the app. The
+seed data in migration `003_seed_authorities.sql` is separate from the schema
+and should not be rerun without checking whether it is already present.
 
 ## 🔐 Step 3: Get API Credentials
 
@@ -104,31 +92,43 @@ This guide will help you set up Supabase as the backend for your CivicVigilance 
 
 3. **IMPORTANT**: Never commit `.env` to Git! It's already in `.gitignore`.
 
+### 3.3 Keep frontend and backend on the same project
+
+The mobile app reads `EXPO_PUBLIC_SUPABASE_URL` and
+`EXPO_PUBLIC_SUPABASE_ANON_KEY` from `frontend/.env`. The backend reads
+`SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` (or legacy
+`SUPABASE_ANON_KEY`) from `backend/.env`. Set each URL and client key to values
+from the same Supabase project; otherwise reports and authentication can be
+split across projects.
+
+The backend's `SUPABASE_SECRET_KEY` (or legacy
+`SUPABASE_SERVICE_ROLE_KEY`) is server-only and is used for privileged admin
+operations. Never place it in frontend files or an `EXPO_PUBLIC_` variable.
+For a Vercel-hosted backend, configure `SUPABASE_URL`,
+`SUPABASE_PUBLISHABLE_KEY` (or `SUPABASE_ANON_KEY`), and the server-only
+`SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`) in the backend
+deployment's environment settings. Keep the URL and keys scoped to the same
+project in each deployment environment.
+
 ---
 
 ## 🖼️ Step 4: Configure Storage for Images
 
-### 4.1 Verify Storage Bucket
-The migration should have created the `issue-photos` bucket automatically.
+### 4.1 Verify Storage Buckets
 
-Verify:
-1. Go to **Storage** in Supabase dashboard
-2. You should see `issue-photos` bucket
-3. If NOT there, create it manually:
-   - Click "New bucket"
-   - Name: `issue-photos`
-   - Public bucket: **Yes** ✅
-   - Click "Create bucket"
+After reconciling the migrations, open **Storage → Buckets** and verify:
 
-### 4.2 Set File Size Limits (Optional)
-1. Click on `issue-photos` bucket
-2. Go to **Configuration**
-3. Set:
-   - **Max file size**: 5 MB (photos get compressed anyway)
-   - **Allowed MIME types**: `image/*`
+- `issue-photos` exists and is **public** for public report photos.
+- `avatars` exists and is **public** for profile images.
+- `private-issue-photos` exists and is **private** for private report evidence.
 
----
+The migrations configure these buckets and access policies, but local SQL files
+do not prove they exist in the remote project. Check the corresponding Storage
+policies as well. Do not create or change buckets until the remote project
+state and migration history have been checked.
 
+Migration `009` configures a 10 MiB limit and image MIME type restrictions for
+the two report-photo buckets.
 ## 🔒 Step 5: Configure Authentication
 
 ### 5.1 Enable Email Auth
@@ -153,12 +153,46 @@ Verify:
 3. Get Client ID and Secret
 4. Paste into Supabase
 
-### 5.3 Configure Redirect URLs
-Add your app's redirect URLs:
+### 5.3 Configure email confirmation and app redirects
+
+The app selects a callback according to its runtime platform:
+
+- Native Expo: `civicvigilance://auth/callback`
+- Production web: `https://civic-vigilance-app.vercel.app/`
+- Local web development: the current Expo web origin at `/` (Expo defaults to
+  port `8081`; use the actual origin shown by the development server if its port
+  changes).
+
+In **Authentication → URL Configuration → Redirect URLs**, allow the exact
+production web URL and native URI above, plus the exact local web origin(s)
+used for development (for example `http://localhost:8081/` and
+`http://127.0.0.1:8081/` if both are used). If Expo selects a different port,
+add that exact origin. Do not use broad wildcards, an obsolete
+`civicvigilance://oauth/callback`, or a localhost URL as the production Site URL.
+
+Set **Site URL** to `https://civic-vigilance-app.vercel.app/`. Explicit
+`emailRedirectTo`/`redirectTo` values are selected by the app and must each be
+in the Redirect URLs allow list. The web callback returns to the app root; the
+app exchanges the PKCE code before it renders authenticated routes. Native
+callbacks continue to use the registered custom scheme.
+
+Under **Authentication → Email Templates → Confirm signup**, use Supabase's
+confirmation URL variable, for example:
+
+```html
+<a href="{{ .ConfirmationURL }}">Confirm your email</a>
 ```
-civicvigilance://oauth/callback
-http://localhost:19000 (for Expo dev)
-```
+
+Do not hardcode a localhost URL, `{{ .SiteURL }}`, or a manually constructed
+verification URL in the confirmation link. Supabase's
+`{{ .ConfirmationURL }}` applies the requested redirect after validating the
+one-time confirmation token. If custom SMTP is enabled, confirm that it
+delivers the current template and that its sender/domain configuration is
+verified; SMTP does not determine the app callback URI.
+
+If testing with Expo Go rather than the installed development build, the
+callback scheme may differ; this project currently uses a native development
+build and does not generate an Expo Go redirect dynamically.
 
 ---
 
@@ -228,8 +262,11 @@ SELECT * FROM pg_policies WHERE tablename = 'issues';
 ### Problem: Images not uploading
 **Solution:** Check storage bucket policies:
 
-1. Go to Storage → issue-photos → Policies
-2. Ensure "Authenticated users can upload" policy exists
+1. In **Storage → Policies**, review policies for `issue-photos`,
+   `private-issue-photos`, and `avatars`.
+2. Compare them with the policies in the reconciled local migrations. Do not
+   create or broaden policies until the remote migration history and bucket
+   visibility have been verified.
 
 ### Problem: Geospatial queries not working
 **Solution:** Ensure PostGIS is enabled:

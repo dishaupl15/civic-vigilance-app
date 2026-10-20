@@ -28,7 +28,7 @@
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.RECORD_AUDIO"
       ],
-      "package": "com.civicvigilance.app",
+      "package": "com.anonymous.civicvigilance",
       "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/App Icon/Civic Vigilance (1).png",

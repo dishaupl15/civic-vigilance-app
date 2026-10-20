@@ -1,80 +1,135 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, isSupabaseConfigured } from './supabase';
 import { getBackend } from './backend';
+import { castVoteSqlite, getUserVoteSqlite } from './sqliteIssues';
+import { ensureSessionUserId } from './sqliteAuth';
 
-/** Retry helper with exponential backoff */
-async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
-  let lastError: any;
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastError = err;
-      if (attempt < maxRetries - 1) {
-        await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt)));
-      }
-    }
-  }
-  throw lastError;
+export type VoteValue = -1 | 0 | 1;
+export type UserVoteResult =
+  | { status: 'ready'; vote: VoteValue; hasVote: boolean }
+  | { status: 'unauthenticated' }
+  | { status: 'unconfigured' };
+
+export interface CastVoteResult {
+  vote: VoteValue;
+  upvotes?: number;
+  downvotes?: number;
+  warning?: string;
 }
 
-const VOTES_KEY = 'demo_votes'; // { [issueId: string]: -1 | 0 | 1 }
+const VOTES_KEY = 'demo_votes';
+const activeVoteKeys = new Set<string>();
 
 async function readVotes(): Promise<Record<string, number>> {
   const raw = await AsyncStorage.getItem(VOTES_KEY);
-  return raw ? JSON.parse(raw) : {};
+  return raw ? JSON.parse(raw) as Record<string, number> : {};
 }
 
-async function writeVotes(map: Record<string, number>) {
+async function writeVotes(map: Record<string, number>): Promise<void> {
   await AsyncStorage.setItem(VOTES_KEY, JSON.stringify(map));
 }
 
-export async function getUserVote(issueId: string): Promise<-1 | 0 | 1> {
-  // Handle dummy issues or fallback if backend is sqlite
-  if (getBackend() === 'sqlite' || issueId.startsWith('dummy-')) {
-    const map = await readVotes();
-    return ((map[issueId] as any) ?? 0) as -1 | 0 | 1;
-  }
-
-  // Supabase backend
-  if (!isSupabaseConfigured) return 0;
-  const { data: userRes } = await supabase.auth.getUser();
-  if (!userRes?.user) return 0;
-  const { data } = await supabase.from('votes').select('value').eq('issue_id', issueId).limit(1).single();
-  return ((data?.value as any) ?? 0) as -1 | 0 | 1;
+function parseVote(value: unknown): VoteValue {
+  return value === -1 || value === 1 ? value : 0;
 }
 
-export async function castVote(issueId: string, value: -1 | 1): Promise<{ vote: -1 | 0 | 1; upvotes?: number; downvotes?: number; }> {
-  if (getBackend() === 'sqlite' || issueId.startsWith('dummy-')) {
+export async function getUserVote(issueId: string): Promise<UserVoteResult> {
+  if (getBackend() === 'sqlite') {
+    const userId = await ensureSessionUserId();
+    const vote = parseVote(getUserVoteSqlite(Number(issueId), userId));
+    return { status: 'ready', vote, hasVote: vote !== 0 };
+  }
+  if (issueId.startsWith('dummy-')) {
     const map = await readVotes();
-    const current = (map[issueId] ?? 0) as -1 | 0 | 1;
-    const next = current === value ? 0 : value;
-    map[issueId] = next;
-    await writeVotes(map);
+    const vote = parseVote(map[issueId]);
+    return { status: 'ready', vote, hasVote: vote !== 0 };
+  }
+  if (!isSupabaseConfigured) return { status: 'unconfigured' };
 
-    // For dummy issues, we return the vote. The UI handles the count optimistically.
-    // If we wanted to be fancy we'd fetch the base count and adjust, but optimistic is enough.
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError) throw new Error('Could not verify your sign-in. Please sign in again.');
+  const userId = authData.user?.id;
+  if (!userId) return { status: 'unauthenticated' };
+
+  const { data, error } = await supabase
+    .from('votes')
+    .select('vote')
+    .eq('issue_id', issueId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) throw new Error('Could not load your vote. Please try again.');
+
+  const vote = parseVote(data?.vote);
+  return { status: 'ready', vote, hasVote: data !== null };
+}
+
+export async function castVote(issueId: string, value: -1 | 1): Promise<CastVoteResult> {
+  if (getBackend() === 'sqlite') {
+    const userId = await ensureSessionUserId();
+    return castVoteSqlite(Number(issueId), userId, value);
+  }
+  if (issueId.startsWith('dummy-')) {
+    const map = await readVotes();
+    const current = parseVote(map[issueId]);
+    const next: VoteValue = current === value ? 0 : value;
+    if (next === 0) delete map[issueId];
+    else map[issueId] = next;
+    await writeVotes(map);
     return { vote: next };
   }
+  if (!isSupabaseConfigured) throw new Error('Voting is unavailable because Supabase is not configured.');
 
-  // Supabase backend
-  if (!isSupabaseConfigured) return { vote: 0 };
-  const { data: userRes } = await supabase.auth.getUser();
-  if (!userRes?.user) return { vote: 0 };
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError) throw new Error('Could not verify your sign-in. Please sign in again.');
+  const userId = authData.user?.id;
+  if (!userId) throw new Error('Sign in before voting.');
 
-  return withRetry(async () => {
-    // Fetch current vote
-    const { data: cur } = await supabase.from('votes').select('id,value').eq('issue_id', issueId).limit(1).single();
-    const next = cur?.value === value ? 0 : value;
-    if (next === 0 && cur?.id) {
-      await supabase.from('votes').delete().eq('id', cur.id);
+  const lockKey = `${userId}:${issueId}`;
+  if (activeVoteKeys.has(lockKey)) throw new Error('Your vote is still being saved.');
+  activeVoteKeys.add(lockKey);
+
+  try {
+    const { data: currentVote, error: currentError } = await supabase
+      .from('votes')
+      .select('id,vote')
+      .eq('issue_id', issueId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (currentError) throw new Error('Could not load your current vote. Please try again.');
+
+    const next: VoteValue = currentVote?.vote === value ? 0 : value;
+    if (next === 0 && currentVote) {
+      const { error } = await supabase
+        .from('votes')
+        .delete()
+        .eq('id', currentVote.id)
+        .eq('user_id', userId);
+      if (error) throw new Error('Your vote could not be removed. Please try again.');
     } else {
-      // upsert by unique (user_id, issue_id)
-      await supabase.from('votes').upsert({ issue_id: issueId, value: next || 1 });
+      const { error } = await supabase
+        .from('votes')
+        .upsert(
+          { issue_id: issueId, user_id: userId, vote: next },
+          { onConflict: 'issue_id,user_id' },
+        );
+      if (error) throw new Error('Your vote could not be saved. Please try again.');
     }
 
-    // Read updated counts
-    const { data: issue } = await supabase.from('issues').select('upvotes,downvotes').eq('id', issueId).single();
-    return { vote: next as any, upvotes: issue?.upvotes, downvotes: issue?.downvotes };
-  });
+    const { data: metrics, error: metricsError } = await supabase
+      .from('issue_metrics')
+      .select('upvotes,downvotes')
+      .eq('issue_id', issueId)
+      .maybeSingle();
+    if (metricsError) {
+      return { vote: next, warning: 'Your vote was saved, but the updated totals could not be loaded.' };
+    }
+
+    return {
+      vote: next,
+      upvotes: metrics?.upvotes ?? undefined,
+      downvotes: metrics?.downvotes ?? undefined,
+    };
+  } finally {
+    activeVoteKeys.delete(lockKey);
+  }
 }

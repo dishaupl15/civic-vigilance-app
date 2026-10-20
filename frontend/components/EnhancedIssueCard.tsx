@@ -19,12 +19,13 @@
  */
 
 import React, { useEffect, useState, useCallback, useMemo, memo } from 'react';
-import { View, Text, Image, StyleSheet, TouchableOpacity, Pressable } from 'react-native';
+import { View, Text, Image, StyleSheet, TouchableOpacity, Pressable, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { IssueWithUserData } from '../types';
 import { castVote, getUserVote } from '../lib/votes';
 import { formatCount, getTimeAgo, formatDistance } from '../lib/format';
 import { CATEGORY_EMOJIS } from './CategoryPicker';
+import { useAuth } from '../hooks/useAuth';
 
 interface Props {
   item: IssueWithUserData;
@@ -33,15 +34,35 @@ interface Props {
 }
 
 function EnhancedIssueCard({ item, onPress, distance }: Props) {
+  const { isGuest, signOut } = useAuth();
   const [vote, setVote] = useState<-1 | 0 | 1>(0);
+  const [voteLoading, setVoteLoading] = useState(true);
+  const [voteSubmitting, setVoteSubmitting] = useState(false);
   const [upvotes, setUpvotes] = useState(item.upvotes ?? 0);
   const [imageError, setImageError] = useState(false);
 
   useEffect(() => {
-    getUserVote(item.id).then(setVote).catch(() => { });
+    let active = true;
+    getUserVote(item.id).then((result) => {
+      if (active) setVote(result.status === 'ready' ? result.vote : 0);
+    }).catch(() => {
+      if (active) Alert.alert('Vote unavailable', 'Could not load your vote. Please try again.');
+    }).finally(() => {
+      if (active) setVoteLoading(false);
+    });
+    return () => { active = false; };
   }, [item.id]);
 
   const onVote = useCallback(async (val: -1 | 1) => {
+    if (voteLoading || voteSubmitting) return;
+    if (isGuest) {
+      Alert.alert('Login Required', 'You need an account to vote on issues.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Sign In', onPress: () => signOut() },
+      ]);
+      return;
+    }
+    setVoteSubmitting(true);
     const prev = vote;
     // Optimistic update
     if (val === 1) {
@@ -58,12 +79,15 @@ function EnhancedIssueCard({ item, onPress, distance }: Props) {
       const res = await castVote(item.id, val);
       if (typeof res.upvotes === 'number') setUpvotes(res.upvotes);
       setVote(res.vote);
-    } catch {
-      // Revert on error
+      if (res.warning) Alert.alert('Vote saved', res.warning);
+    } catch (cause) {
       setVote(prev);
       setUpvotes(item.upvotes ?? 0);
+      Alert.alert('Vote not saved', cause instanceof Error ? cause.message : 'Please try again.');
+    } finally {
+      setVoteSubmitting(false);
     }
-  }, [vote, upvotes, item.id, item.upvotes]);
+  }, [vote, upvotes, item.id, item.upvotes, voteLoading, voteSubmitting, isGuest, signOut]);
 
   // Memoize expensive computations
   const categoryEmoji = useMemo(() =>

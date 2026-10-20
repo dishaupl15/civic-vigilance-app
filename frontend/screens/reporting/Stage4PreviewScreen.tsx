@@ -9,7 +9,7 @@
  * - Navigation to edit previous stages
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -32,6 +32,7 @@ interface Props {
   category: CategoryKey;
   address: string;
   coords: { lat: number; lng: number } | null;
+  selectedAuthorityHandles: string[];
   privacy: TwitterPostingMethod;
   onSubmit: () => void;
   onBack: () => void;
@@ -61,27 +62,23 @@ export default function Stage4PreviewScreen({
   category,
   address,
   coords,
+  selectedAuthorityHandles,
   privacy,
   onSubmit,
   onBack,
   onEditDetails,
   onEditPrivacy,
 }: Props) {
-  const [authorities, setAuthorities] = useState<ReturnType<typeof getMatchedAuthoritiesWithDetails>>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // Load suggested authorities based on location + category (PRD Section 7.3)
-  useEffect(() => {
-    const matchedAuthorities = getMatchedAuthoritiesWithDetails(
+  const authorities = useMemo(() => {
+    const matches = getMatchedAuthoritiesWithDetails(
       coords?.lat,
       coords?.lng,
       address,
       category
     );
-
-    if (__DEV__) console.log('[Preview] Matched authorities:', matchedAuthorities);
-    setAuthorities(matchedAuthorities);
-  }, [coords, category, address]);
+    return matches.filter((authority) => selectedAuthorityHandles.includes(authority.handle));
+  }, [coords?.lat, coords?.lng, category, address, selectedAuthorityHandles]);
 
   const handleSubmit = async () => {
     setIsSubmitting(true);
@@ -200,8 +197,8 @@ export default function Stage4PreviewScreen({
       {/* Authorities Section */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>📢 Authorities Tagged</Text>
-          <Pressable>
+          <Text style={styles.sectionTitle}>📢 Selected account suggestions</Text>
+          <Pressable onPress={onEditDetails}>
             <Text style={styles.editLink}>Edit</Text>
           </Pressable>
         </View>
@@ -217,8 +214,8 @@ export default function Stage4PreviewScreen({
 
         <Text style={styles.hintText}>
           {authorities.length === 0
-            ? 'No reliable authority match was found. Choose an official portal manually after saving.'
-            : 'These are unverified seed suggestions. Confirm the recipient on its official website before sharing.'}
+            ? 'No account suggestions selected. No authority will be contacted by Civic Vigilance.'
+            : 'Selected directory accounts are included only in your editable X draft. Confirm each account on its official website; the app does not contact them.'}
         </Text>
 
         <Text style={styles.hintText}>
@@ -266,7 +263,7 @@ export default function Stage4PreviewScreen({
           <Text style={styles.infoTitle}>ℹ️ What happens after you post?</Text>
           <Text style={styles.infoText}>
             ✅ Your issue appears in CivicVigilance feed{'\n'}
-            {privacy !== 'none' && '✅ Authorities get tagged on Twitter\n'}
+            {privacy !== 'none' && authorities.length > 0 && '✅ Selected handles appear in your editable X draft\n'}
             ✅ Community can upvote to amplify{'\n'}
             ✅ More upvotes = More visibility{'\n\n'}
             ⚠️ Note: We don't track government action.{'\n'}

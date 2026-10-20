@@ -12,9 +12,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 export default function FeedScreen() {
   const [sort, setSort] = useState<'trending' | 'newest' | 'nearby'>('nearby');
-  const { data, loading } = useIssues(sort);
-  const navigation = useNavigation<any>();
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const { data, loading, error } = useIssues(sort, coords);
+  const navigation = useNavigation<any>();
 
   useEffect(() => {
     (async () => {
@@ -61,8 +61,18 @@ export default function FeedScreen() {
         <Header />
         <View style={styles.sortContainer}>
           <SortBar value={sort} onChange={setSort} />
+          {sort === 'trending' && (
+            <Text style={styles.limitation}>Trending sorts only the fetched reports by engagement; it is not a global ranking.</Text>
+          )}
+          {sort === 'nearby' && !coords && !loading && (
+            <Text style={styles.limitation}>Device location is unavailable; recent reports are shown.</Text>
+          )}
+          {sort === 'nearby' && coords && (
+            <Text style={styles.limitation}>Nearby sorts loaded reports by distance; it is not radius-filtered or global.</Text>
+          )}
         </View>
 
+        {error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
         <FlatList
           data={data}
           keyExtractor={(item) => String(item.id)}
@@ -71,7 +81,7 @@ export default function FeedScreen() {
           renderItem={({ item }) => (
             <EnhancedIssueCard
               item={item}
-              distance={getDistance((item as any).lat ?? item.location.lat, (item as any).lng ?? item.location.lng)}
+              distance={getDistance(item.lat ?? item.location?.lat, item.lng ?? item.location?.lng)}
               onPress={() => navigation.navigate('PostDetail', { id: item.id })}
             />
           )}
@@ -95,6 +105,17 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.sm,
     backgroundColor: Colors.background,
     zIndex: 10,
+  },
+  limitation: {
+    ...Typography.caption,
+    color: Colors.textSecondary,
+    paddingTop: Spacing.xs,
+  },
+  error: {
+    ...Typography.body,
+    color: Colors.error,
+    paddingHorizontal: Spacing.screenPadding,
+    paddingVertical: Spacing.sm,
   },
   listContent: {
     paddingHorizontal: Spacing.screenPadding,

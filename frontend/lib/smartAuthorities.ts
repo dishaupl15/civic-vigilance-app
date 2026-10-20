@@ -4,8 +4,7 @@
  *
  * Logic Flow:
  * 1. Parse address to extract city, state, PIN code
- * 2. Convert GPS to geohash (precision 4 = ~20km)
- * 3. Query authorities by geohash prefix
+ * 2. Convert GPS to a precise geohash and match jurisdiction prefixes
  * 4. Fallback hierarchy: exact → city → state → national
  * 5. Filter by category compatibility
  * 6. Sort by priority (1=primary, 2=secondary, 3=fallback)
@@ -32,12 +31,8 @@ export interface MatchedAuthority {
 function parseAddress(address: string): {
   city: string | null;
   state: string | null;
-  pinCode: string | null;
 } {
   const parts = address.split(',').map((p) => p.trim());
-
-  // Extract PIN code (6 digits)
-  const pinCode = parts.find((p) => /^\d{6}$/.test(p)) || null;
 
   // Common Indian states
   const indianStates = [
@@ -62,9 +57,9 @@ function parseAddress(address: string): {
 
   // City is typically before state
   const stateIndex = state ? parts.findIndex((p) => p.toLowerCase() === state.toLowerCase()) : -1;
-  const city = stateIndex > 0 ? parts[stateIndex - 1] : parts[0];
+  const city = stateIndex > 0 ? parts[stateIndex - 1] : null;
 
-  return { city, state, pinCode };
+  return { city, state };
 }
 
 /**
@@ -85,22 +80,17 @@ export function findAuthorities(
   const matches: MatchedAuthority[] = [];
 
   // Step 1: Parse address
-  const { city, state, pinCode } = parseAddress(address);
-
-  console.log('[SmartAuthorities] Parsed address:', { city, state, pinCode });
+  const { city, state } = parseAddress(address);
 
   const hasCoordinates = typeof lat === 'number' && typeof lng === 'number' &&
     Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
-  const geohash = hasCoordinates ? encodeGeohash(lat, lng, 4) : '';
-  const geohashPrefix = geohash.substring(0, 4);
-
-  console.log('[SmartAuthorities] Geohash:', geohash, 'Prefix:', geohashPrefix);
+  const geohash = hasCoordinates ? encodeGeohash(lat, lng, 8) : '';
 
   // Step 3: Match authorities by geohash
   const geohashMatches = hasCoordinates ? AUTHORITIES_SEED_DATA.filter((auth) => {
-    // Check if any of the authority's geohashes match our location
     return auth.jurisdiction.geohashes.some((authGeohash) =>
-      authGeohash.startsWith(geohashPrefix.substring(0, 3)) // Match first 3 chars (~150km)
+      authGeohash.length > 0 &&
+      (geohash.startsWith(authGeohash) || authGeohash.startsWith(geohash))
     );
   }) : [];
 
@@ -124,6 +114,7 @@ export function findAuthorities(
     const cityMatches = AUTHORITIES_SEED_DATA.filter(
       (auth) =>
         auth.jurisdiction.city?.toLowerCase() === city.toLowerCase() &&
+        (!state || auth.jurisdiction.state?.toLowerCase() === state.toLowerCase()) &&
         auth.issueCategories.includes(category)
     );
 
@@ -193,8 +184,6 @@ export function findAuthorities(
   const sorted = matches
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, 5);
-
-  console.log('[SmartAuthorities] Matched authorities:', sorted);
 
   return sorted;
 }

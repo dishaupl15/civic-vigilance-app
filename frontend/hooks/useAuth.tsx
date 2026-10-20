@@ -10,13 +10,38 @@
  * connecting citizens with civic authorities via GPS-tagged reports.
  */
 
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Linking from 'expo-linking';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { User as ProfileUser } from '../types';
 import * as Crypto from 'expo-crypto';
 import { getBackend } from '../lib/backend';
 import { currentUserLocal, initAuth, signInLocal, signOutLocal, signUpLocal } from '../lib/sqliteAuth';
 import { loadProfile } from '../lib/profile';
+import { sha256 } from 'js-sha256';
+import {
+  createAuthCallbackHandler,
+  getAuthRedirectUrl,
+  parseAuthCallbackUrl,
+} from '../lib/authCallback';
+import { validateEmail } from '../lib/authValidation';
+
+const PASSWORD_RECOVERY_KEY = 'auth_password_recovery_pending';
+const CALLBACK_FAILURE_MESSAGE =
+  'This authentication link is invalid, expired, or already used. Request a new link and try again.';
+const SIGN_OUT_FAILURE_MESSAGE = 'Could not sign out. Please try again.';
+
+function getAuthRedirectRuntime() {
+  return {
+    platform: Platform.OS === 'web' ? 'web' as const : 'native' as const,
+    isDevelopment: __DEV__,
+    webOrigin: Platform.OS === 'web' && typeof window !== 'undefined'
+      ? window.location.origin
+      : undefined,
+  };
+}
 
 // User Session type (Auth User)
 interface AuthUser {
@@ -30,16 +55,26 @@ interface SimpleSession {
 
 type AuthSession = SimpleSession | null;
 
+interface SignupResponseData {
+  session: unknown;
+  user?: { identities?: unknown[] | null } | null;
+}
+
 interface AuthContextType {
   session: AuthSession;
   profile: ProfileUser | null;
   isLoading: boolean;
   isGuest: boolean;
+  isPasswordRecovery: boolean;
+  authCallbackError: string | null;
   signIn: (email: string, password: string) => Promise<{ error?: string; code?: string } | undefined>;
   signInAsGuest: () => Promise<{ error?: string; code?: string } | undefined>;
-  signUp: (email: string, password: string) => Promise<{ data?: any; error?: string; code?: string }>;
+  signUp: (email: string, password: string) => Promise<{ data?: SignupResponseData; error?: string; code?: string }>;
   resetPassword: (email: string) => Promise<{ error?: string; code?: string } | undefined>;
-  signOut: () => Promise<void>;
+  updatePassword: (password: string) => Promise<{ error?: string; code?: string } | undefined>;
+  cancelPasswordRecovery: () => Promise<{ error?: string } | undefined>;
+  clearAuthCallbackError: () => void;
+  signOut: () => Promise<{ error?: string } | undefined>;
   refreshProfile: () => Promise<void>;
 }
 
@@ -69,6 +104,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<AuthSession>(null);
   const [profile, setProfile] = useState<ProfileUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
+  const [authCallbackError, setAuthCallbackError] = useState<string | null>(null);
+  const authEventVersion = useRef(0);
+  const currentAuthUserId = useRef<string | null>(null);
+  const signOutInProgress = useRef(false);
+  const callbackCount = useRef(0);
+  const handledCallbackFingerprints = useRef(new Set<string>());
+  const authInitializationDone = useRef(false);
+  const callbackHandler = useRef<ReturnType<typeof createAuthCallbackHandler> | null>(null);
 
   // Helper to fetch profile
   const fetchProfile = async (userId: string) => {
@@ -77,6 +121,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       console.error('[Auth] Exception fetching profile:', e);
       return null;
+    }
+  };
+
+  const clearRecoveryMarker = async (userId?: string) => {
+    try {
+      const pendingUserId = await AsyncStorage.getItem(PASSWORD_RECOVERY_KEY);
+      if (pendingUserId && (!userId || pendingUserId === userId)) {
+        await AsyncStorage.removeItem(PASSWORD_RECOVERY_KEY);
+      }
+    } catch {
+      // Session state remains authoritative if local recovery metadata cannot be cleared.
     }
   };
 
@@ -95,55 +150,206 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return () => { active = false; };
     }
 
-    // Check if Supabase is configured
     if (!isSupabaseConfigured) {
-      console.error('Supabase is not configured. Please check your .env file.');
+      console.error('[Auth] Supabase is not configured.');
       setIsLoading(false);
       return;
     }
 
-    // Get initial session
-    supabase.auth.getSession().then(async ({ data: { session: supabaseSession } }: { data: { session: any } }) => {
-      if (supabaseSession) {
-        setSession({
-          user: {
-            id: supabaseSession.user.id,
-            email: supabaseSession.user.email ?? null,
-          },
-        });
-        // Fetch profile
-        const userProfile = await fetchProfile(supabaseSession.user.id);
-        setProfile(userProfile);
-      }
-      setIsLoading(false);
-    });
-
-    // Set up Supabase auth state listener
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event: any, supabaseSession: any) => {
-      if (supabaseSession) {
-        // User is signed in
-        const authUser = {
-          id: supabaseSession.user.id,
-          email: supabaseSession.user.email ?? null,
-        };
-        setSession({ user: authUser });
-
-        // Only fetch profile if not already loaded or if user changed
-        setProfile(prev => {
-          if (prev?.uid === authUser.id) return prev;
-          // Trigger fetch (async side effect handling in separate Effect would be cleaner, but doing it here for immediacy)
-          fetchProfile(authUser.id).then(p => setProfile(p));
-          return prev;
-        });
-      } else {
-        // User is signed out
+    let active = true;
+    const updateFromSession = (supabaseSession: any) => {
+      if (!supabaseSession) {
+        currentAuthUserId.current = null;
         setSession(null);
         setProfile(null);
+        return;
+      }
+      const authUser = {
+        id: supabaseSession.user.id,
+        email: supabaseSession.user.email ?? null,
+      };
+      currentAuthUserId.current = authUser.id;
+      const eventVersion = authEventVersion.current;
+      setSession({ user: authUser });
+      void fetchProfile(authUser.id).then((userProfile) => {
+        if (active && authEventVersion.current === eventVersion) setProfile(userProfile);
+      });
+    };
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event: any, supabaseSession: any) => {
+      const signedOutUserId = event === 'SIGNED_OUT' ? currentAuthUserId.current : null;
+      authEventVersion.current += 1;
+      if (supabaseSession) {
+        updateFromSession(supabaseSession);
+      } else {
+        updateFromSession(null);
+      }
+      if (event === 'SIGNED_OUT') {
+        setIsPasswordRecovery(false);
+        if (signedOutUserId) void clearRecoveryMarker(signedOutUserId);
       }
     });
 
-    // Cleanup listener on unmount
-    return () => subscription.unsubscribe();
+    callbackHandler.current = createAuthCallbackHandler({
+      exchangeCodeForSession: async (code) => {
+        const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+        return { error, redirectType: data?.redirectType };
+      },
+      verifyOtp: async (tokenHash, type) => {
+        const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type });
+        return { error };
+      },
+      setSession: async (accessToken, refreshToken) => {
+        const { error } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        });
+        return { error };
+      },
+    }, getAuthRedirectRuntime());
+
+    const processCallback = async (rawUrl: string) => {
+      const callbackRuntime = getAuthRedirectRuntime();
+      const parsed = parseAuthCallbackUrl(rawUrl, callbackRuntime);
+      if (!parsed) return;
+
+      const fingerprint = sha256(rawUrl);
+      if (handledCallbackFingerprints.current.has(fingerprint)) return;
+      handledCallbackFingerprints.current.add(fingerprint);
+      if (handledCallbackFingerprints.current.size > 20) {
+        const oldest = handledCallbackFingerprints.current.values().next().value;
+        if (oldest) handledCallbackFingerprints.current.delete(oldest);
+      }
+
+      authEventVersion.current += 1;
+      callbackCount.current += 1;
+      setIsLoading(true);
+      setAuthCallbackError(null);
+
+      try {
+        const result = await callbackHandler.current?.(rawUrl);
+        if (result === 'recovery') {
+          const authVersionBeforeSessionCheck = authEventVersion.current;
+          const { data, error } = await supabase.auth.getSession();
+          const recoveryUserId = data.session?.user?.id;
+          if (error) throw new Error(CALLBACK_FAILURE_MESSAGE);
+          if (!recoveryUserId) {
+            setIsPasswordRecovery(false);
+            await clearRecoveryMarker(currentAuthUserId.current ?? undefined);
+            throw new Error(CALLBACK_FAILURE_MESSAGE);
+          }
+          if (
+            authEventVersion.current !== authVersionBeforeSessionCheck
+            && currentAuthUserId.current !== recoveryUserId
+          ) {
+            throw new Error(CALLBACK_FAILURE_MESSAGE);
+          }
+          await AsyncStorage.setItem(PASSWORD_RECOVERY_KEY, recoveryUserId).catch(() => undefined);
+          setIsPasswordRecovery(true);
+        } else if (result === 'confirmed') {
+          setIsPasswordRecovery(false);
+          await AsyncStorage.removeItem(PASSWORD_RECOVERY_KEY).catch(() => undefined);
+          Alert.alert(
+            'Email verified',
+            'Your email has been confirmed. You can now sign in or continue if you are already signed in.'
+          );
+        }
+      } catch {
+        setAuthCallbackError(CALLBACK_FAILURE_MESSAGE);
+      } finally {
+        if (callbackRuntime.platform === 'web' && typeof window !== 'undefined') {
+          window.history.replaceState(window.history.state, '', window.location.pathname);
+        }
+        callbackCount.current -= 1;
+        if (active && authInitializationDone.current && callbackCount.current === 0) setIsLoading(false);
+      }
+    };
+
+    const urlSubscription = Linking.addEventListener('url', ({ url }) => {
+      void processCallback(url);
+    });
+
+    const restoreSession = async () => {
+      const initialSessionVersion = authEventVersion.current;
+      try {
+        const [sessionResponse, recoveryPending] = await Promise.all([
+          supabase.auth.getSession(),
+          AsyncStorage.getItem(PASSWORD_RECOVERY_KEY),
+        ]);
+        if (sessionResponse.error) throw sessionResponse.error;
+        const supabaseSession = sessionResponse.data.session;
+        if (!active || authEventVersion.current !== initialSessionVersion) return;
+
+        if (supabaseSession) {
+          currentAuthUserId.current = supabaseSession.user.id;
+          setSession({
+            user: {
+              id: supabaseSession.user.id,
+              email: supabaseSession.user.email ?? null,
+            },
+          });
+          const recoveryBelongsToSession = recoveryPending === supabaseSession.user.id;
+          setIsPasswordRecovery(recoveryBelongsToSession);
+          if (recoveryPending && !recoveryBelongsToSession) {
+            await AsyncStorage.removeItem(PASSWORD_RECOVERY_KEY).catch(() => undefined);
+          }
+          const userProfile = await fetchProfile(supabaseSession.user.id);
+          if (active && authEventVersion.current === initialSessionVersion) setProfile(userProfile);
+        } else {
+          currentAuthUserId.current = null;
+          setSession(null);
+          setProfile(null);
+          setIsPasswordRecovery(false);
+          await clearRecoveryMarker();
+        }
+      } catch {
+        if (active && authEventVersion.current === initialSessionVersion) {
+          currentAuthUserId.current = null;
+          setSession(null);
+          setProfile(null);
+        }
+      }
+    };
+
+    const initialize = async () => {
+      const browserUrl = Platform.OS === 'web' && typeof window !== 'undefined'
+        ? window.location.href
+        : null;
+      const initialUrl = (await Linking.getInitialURL().catch(() => null)) ?? browserUrl;
+      if (initialUrl) await processCallback(initialUrl);
+      await restoreSession();
+      authInitializationDone.current = true;
+      if (active && callbackCount.current === 0) setIsLoading(false);
+    };
+    void initialize();
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      const onBrowserLocationChange = () => {
+        void processCallback(window.location.href);
+      };
+      window.addEventListener('hashchange', onBrowserLocationChange);
+      window.addEventListener('popstate', onBrowserLocationChange);
+
+      const cleanupBrowserLocationListeners = () => {
+        window.removeEventListener('hashchange', onBrowserLocationChange);
+        window.removeEventListener('popstate', onBrowserLocationChange);
+      };
+
+      return () => {
+        active = false;
+        callbackHandler.current = null;
+        urlSubscription.remove();
+        subscription.unsubscribe();
+        cleanupBrowserLocationListeners();
+      };
+    }
+
+    return () => {
+      active = false;
+      callbackHandler.current = null;
+      urlSubscription.remove();
+      subscription.unsubscribe();
+    };
   }, []);
 
   /**
@@ -157,6 +363,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     profile,
     isLoading,
     isGuest: session?.user?.email === '__guest__',
+    isPasswordRecovery,
+    authCallbackError,
 
     refreshProfile: async () => {
       if (session?.user.id) {
@@ -251,11 +459,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
 
         if (error) {
+          const errorMessage = String(error.message || '');
+          if (/email not confirmed/i.test(errorMessage)) {
+            return {
+              error: 'Please verify your email using the confirmation link before signing in.',
+              code: error.status?.toString() || 'auth/email-not-confirmed',
+            };
+          }
           return {
-            error: error.message || 'Failed to sign in',
+            error: errorMessage || 'Failed to sign in',
             code: error.status?.toString() || 'auth/unknown-error',
           };
         }
@@ -263,7 +478,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Session will be updated by onAuthStateChange listener
         return undefined;
       } catch (error: any) {
-        console.error('[Auth] Sign in error:', error);
         return {
           error: authErrorMessage(error, 'Failed to sign in'),
           code: 'auth/unknown-error',
@@ -293,7 +507,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        const { data, error } = await supabase.auth.signUp({ email, password });
+        const emailRedirectTo = getAuthRedirectUrl(getAuthRedirectRuntime());
+        const { data, error } = await supabase.auth.signUp({
+          email: email.trim().toLowerCase(),
+          password,
+          options: { emailRedirectTo },
+        });
 
         if (error) {
           return {
@@ -321,12 +540,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
      * @returns Error object if request fails, undefined if successful
      */
     resetPassword: async (email: string) => {
+      const emailError = validateEmail(email);
+      if (emailError) return { error: emailError, code: 'auth/invalid-email' };
+      if (getBackend() === 'sqlite') {
+        return { error: 'Password recovery is unavailable for local accounts.', code: 'auth/local-unsupported' };
+      }
       if (!isSupabaseConfigured) {
         return { error: 'Supabase Auth not initialized', code: 'auth/not-initialized' };
       }
 
       try {
-        const { error } = await supabase.auth.resetPasswordForEmail(email);
+        const redirectTo = getAuthRedirectUrl(getAuthRedirectRuntime());
+        const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+          redirectTo,
+        });
 
         if (error) {
           return {
@@ -345,32 +572,90 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     },
 
+    updatePassword: async (password: string) => {
+      if (getBackend() === 'sqlite') {
+        return { error: 'Password updates are unavailable for local accounts.', code: 'auth/local-unsupported' };
+      }
+      if (!isSupabaseConfigured) {
+        return { error: 'Supabase Auth is not initialized.', code: 'auth/not-initialized' };
+      }
+      try {
+        const { data, error } = await supabase.auth.updateUser({ password });
+        if (error) return { error: error.message || 'Failed to update password', code: error.status?.toString() || 'auth/unknown-error' };
+        if (!data.user) return { error: 'The password update was not confirmed. Please try again.', code: 'auth/no-user' };
+        setIsPasswordRecovery(false);
+        await AsyncStorage.removeItem(PASSWORD_RECOVERY_KEY);
+        return undefined;
+      } catch (error: any) {
+        return {
+          error: authErrorMessage(error, 'Failed to update password'),
+          code: 'auth/unknown-error',
+        };
+      }
+    },
+
+    cancelPasswordRecovery: async () => {
+      if (getBackend() === 'sqlite') {
+        setIsPasswordRecovery(false);
+        return undefined;
+      }
+      try {
+        const { error } = await supabase.auth.signOut();
+        if (error) return { error: error.message || 'Could not safely leave password recovery.' };
+        setIsPasswordRecovery(false);
+        await AsyncStorage.removeItem(PASSWORD_RECOVERY_KEY);
+        return undefined;
+      } catch (error: any) {
+        return { error: authErrorMessage(error, 'Could not safely leave password recovery.') };
+      }
+    },
+
+    clearAuthCallbackError: () => setAuthCallbackError(null),
+
     /**
      * Sign out current user
      */
     signOut: async () => {
-      if (getBackend() === 'sqlite') {
-        await signOutLocal();
-        setSession(null);
-        setProfile(null);
-        return;
+      if (signOutInProgress.current) {
+        return { error: 'Logout is already in progress. Please wait.' };
       }
-      if (!isSupabaseConfigured) {
-        console.error('[Auth] Supabase Auth not initialized');
-        return;
-      }
-
+      signOutInProgress.current = true;
       try {
-        await supabase.auth.signOut();
-        // Session will be cleared by onAuthStateChange listener
-      } catch (error: any) {
-        console.error('[Auth] Sign out error:', error);
-        // Clear session anyway
-        setSession(null);
-        setProfile(null);
+        if (getBackend() === 'sqlite') {
+          await signOutLocal();
+          setSession(null);
+          setProfile(null);
+          setIsPasswordRecovery(false);
+          return undefined;
+        }
+        if (!isSupabaseConfigured) {
+          return { error: 'Authentication is not initialized. Please try again later.' };
+        }
+
+        const initialAuthEventVersion = authEventVersion.current;
+        const signedOutUserId = currentAuthUserId.current ?? session?.user.id ?? null;
+        const { error } = await supabase.auth.signOut();
+        if (error) return { error: SIGN_OUT_FAILURE_MESSAGE };
+
+        if (signedOutUserId) {
+          await clearRecoveryMarker(signedOutUserId);
+        } else if (authEventVersion.current === initialAuthEventVersion) {
+          await clearRecoveryMarker();
+        }
+        if (authEventVersion.current === initialAuthEventVersion) {
+          setIsPasswordRecovery(false);
+          currentAuthUserId.current = null;
+          setSession(null);
+          setProfile(null);
+        }
+        return undefined;
+      } catch {
+        return { error: SIGN_OUT_FAILURE_MESSAGE };
+      } finally {
+        signOutInProgress.current = false;
       }
     },
-  }), [session, profile, isLoading]);
+  }), [session, profile, isLoading, isPasswordRecovery, authCallbackError]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
