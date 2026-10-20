@@ -1,6 +1,5 @@
 import React, { useRef, useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -46,10 +45,8 @@ export default function SignupScreen() {
       } else if (res?.data?.user && Array.isArray(res.data.user.identities) && res.data.user.identities.length === 0) {
         setError('An account with this email already exists. Try signing in or resetting your password.');
       } else if (!res?.data?.session) {
-        Alert.alert(
-          'Check your email',
-          'Open the Supabase verification email on this device. The link will return you to Civic Vigilance; you can then sign in if you are not signed in automatically.',
-          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        setError(
+          'Supabase did not return an active session. Check that email confirmation is disabled in Supabase Auth, then try again.'
         );
       }
     } catch {

@@ -37,9 +37,15 @@ Do not run `db reset --linked` against staging or production. Do not include see
 
 ## 3. Supabase dashboard settings
 
-- Authentication: enable email/password and email confirmation.
-- Authentication URL Configuration: set the exact HTTPS site URL and required mobile deep links.
-- Authentication email: configure a custom SMTP provider and verify SPF, DKIM, and DMARC.
+- Authentication: keep email/password enabled. To allow immediate email/password signup, disable email confirmation (the dashboard may label this “Confirm email”). This allows accounts with unverified email addresses. Signup is sent directly from the frontend to Supabase Auth; the Node backend and its `.env` do not control confirmation.
+- Authentication URL Configuration:
+  - Site URL: `https://civic-vigilance-app.vercel.app`
+  - Allowed Redirect URLs: `https://civic-vigilance-app.vercel.app/`, `http://localhost:8081/`, and `civicvigilance://auth/callback`.
+  - The frontend's `web` script uses Expo's default web port (`8081`). If Expo reports a different local port, add that exact local origin rather than a broad wildcard.
+- Authentication email templates: if confirmation is enabled in the future, keep the confirmation link as `{{ .ConfirmationURL }}` so Supabase can complete its token/PKCE flow and apply the redirect URL requested by the app. Do not replace it with a direct `{{ .SiteURL }}` link.
+- Authentication email delivery: configure a custom SMTP provider under Authentication → Emails → SMTP Settings, use a verified sender domain, and publish the provider's SPF, DKIM, and DMARC records. Keep SMTP credentials only in Supabase's dashboard. The built-in sender is rate-limited and is not a reliable production mail service.
+- Email troubleshooting: after requesting signup or resend, inspect the Supabase project's Auth logs and the SMTP provider's delivery/bounce logs. An accepted signup/resend response means only that Supabase accepted the request; it does not prove that the recipient received an email.
+- Vercel frontend environment: set `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` to the intended project and `EXPO_PUBLIC_BACKEND_MODE=supabase` for Production. These are frontend values; never set a service-role/secret key as an `EXPO_PUBLIC_*` variable. Redeploy the frontend after changing Vercel environment variables.
 - Authentication protection: configure CAPTCHA and appropriate Auth rate limits.
 - Database: run Security Advisor and confirm RLS is enabled on every exposed table.
 - Storage: verify `issue-photos` is public and `private-issue-photos` is private.

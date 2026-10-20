@@ -118,6 +118,60 @@ describe('Supabase auth context', () => {
     );
   });
 
+  test('adopts the authenticated Supabase session returned by signup', async () => {
+    mockSupabaseAuth.signUp.mockImplementation(async () => {
+      mockAuthListener?.('SIGNED_IN', mockSession);
+      return {
+        data: { user: mockSession.user, session: mockSession },
+        error: null,
+      };
+    });
+    const { result } = await mountAuth();
+
+    await act(async () => {
+      const signup = await result.current.signUp('user@example.org', 'StrongPass1');
+      expect(signup.data?.session).toEqual(mockSession);
+    });
+
+    expect(result.current.session?.user).toEqual({
+      id: 'user-123',
+      email: 'user@example.org',
+    });
+  });
+
+  test('does not authenticate when Supabase signup fails', async () => {
+    mockSupabaseAuth.signUp.mockResolvedValue({
+      data: { user: null, session: null },
+      error: { message: 'Signup is unavailable', status: 500 },
+    });
+    const { result } = await mountAuth();
+
+    await act(async () => {
+      await expect(result.current.signUp('user@example.org', 'StrongPass1')).resolves.toMatchObject({
+        error: 'Signup is unavailable',
+        code: '500',
+      });
+    });
+
+    expect(result.current.session).toBeNull();
+  });
+
+  test('does not authenticate a signup response that has a user but no session', async () => {
+    mockSupabaseAuth.signUp.mockResolvedValue({
+      data: { user: mockSession.user, session: null },
+      error: null,
+    });
+    const { result } = await mountAuth();
+
+    await act(async () => {
+      const signup = await result.current.signUp('user@example.org', 'StrongPass1');
+      expect(signup.data?.user).toEqual(mockSession.user);
+      expect(signup.data?.session).toBeNull();
+    });
+
+    expect(result.current.session).toBeNull();
+  });
+
   test('restores a persisted session and clears it on logout', async () => {
     mockSupabaseAuth.getSession.mockResolvedValue({
       data: { session: mockSession },

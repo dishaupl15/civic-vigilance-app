@@ -525,7 +525,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Session will be updated by onAuthStateChange listener
         return { data };
       } catch (error: any) {
-        console.error('[Auth] Sign up error:', error);
         return {
           error: authErrorMessage(error, 'Failed to sign up'),
           code: 'auth/unknown-error',

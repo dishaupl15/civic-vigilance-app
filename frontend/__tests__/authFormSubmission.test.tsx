@@ -1,6 +1,5 @@
 import React from 'react';
 import { act, fireEvent, render } from '@testing-library/react-native';
-import { Alert } from 'react-native';
 import LoginScreen from '../screens/LoginScreen';
 import SignupScreen from '../screens/SignupScreen';
 
@@ -61,8 +60,26 @@ describe('authentication form submission guards', () => {
     await act(async () => finishSignUp());
   });
 
-  test('shows check-your-email guidance when signup requires confirmation', async () => {
-    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+  test('does not show confirmation-pending UI when signup returns a session', async () => {
+    mockUseAuth.mockReturnValue({
+      signUp: jest.fn().mockResolvedValue({
+        data: { user: { identities: [{}] }, session: { user: { id: 'user-123' } } },
+      }),
+    });
+    const screen = render(<SignupScreen />);
+    fireEvent.changeText(screen.getByLabelText('Email'), 'user@example.org');
+    fireEvent.changeText(screen.getByLabelText('Password'), 'StrongPass1');
+    fireEvent.changeText(screen.getByLabelText('Confirm password'), 'StrongPass1');
+
+    await act(async () => {
+      fireEvent.press(screen.getByText('Sign up'));
+    });
+
+    expect(screen.queryByText('Resend confirmation email')).toBeNull();
+    expect(screen.queryByText(/your account is not active/i)).toBeNull();
+  });
+
+  test('does not claim signup succeeded when Supabase returns no session', async () => {
     mockUseAuth.mockReturnValue({
       signUp: jest.fn().mockResolvedValue({
         data: { user: { identities: [{}] }, session: null },
@@ -77,11 +94,28 @@ describe('authentication form submission guards', () => {
       fireEvent.press(screen.getByText('Sign up'));
     });
 
-    expect(alert).toHaveBeenCalledWith(
-      'Check your email',
-      expect.stringMatching(/open the Supabase verification email on this device/i),
-      expect.any(Array)
-    );
-    alert.mockRestore();
+    expect(screen.getByText(/did not return an active session/i)).toBeTruthy();
+    expect(screen.queryByText(/check your email/i)).toBeNull();
+    expect(screen.queryByText(/verify your email/i)).toBeNull();
+  });
+
+  test('shows a safe existing-account message without confirmation prompts', async () => {
+    const signUp = jest.fn().mockResolvedValue({
+      data: { user: { identities: [] }, session: null },
+    });
+    mockUseAuth.mockReturnValue({ signUp });
+    const screen = render(<SignupScreen />);
+    fireEvent.changeText(screen.getByLabelText('Email'), 'user@example.org');
+    fireEvent.changeText(screen.getByLabelText('Password'), 'StrongPass1');
+    fireEvent.changeText(screen.getByLabelText('Confirm password'), 'StrongPass1');
+
+    await act(async () => {
+      fireEvent.press(screen.getByText('Sign up'));
+    });
+
+    expect(screen.getByText(/An account with this email already exists/i)).toBeTruthy();
+    expect(screen.queryByText(/check your email/i)).toBeNull();
+    expect(screen.queryByText(/verify your email/i)).toBeNull();
+    expect(screen.queryByText('Resend confirmation email')).toBeNull();
   });
 });

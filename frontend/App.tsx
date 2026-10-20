@@ -182,7 +182,7 @@ function AppTabs() {
   );
 }
 
-function Root() {
+export function Root() {
   const {
     session,
     profile,
