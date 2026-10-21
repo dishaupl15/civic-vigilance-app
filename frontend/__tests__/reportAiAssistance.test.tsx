@@ -76,6 +76,11 @@ describe('report AI assistance', () => {
     });
     fireEvent.press(screen.getByRole('button', { name: 'Generate related content' }));
     await waitFor(() => expect(screen.getByText('Photo analyzed. Suggestions are ready for your review.')).toBeTruthy());
+    expect(screen.getByLabelText('AI-generated title draft').props.value).toBe(content.title);
+    expect(screen.getByLabelText('AI-generated description draft').props.value).toBe(content.description);
+    expect(screen.getByLabelText('AI-generated summary').props.value).toBe(content.summary);
+    expect(screen.getByLabelText('AI-generated awareness caption').props.value).toBe(content.awareness_caption);
+    expect(screen.getByLabelText('AI-generated hashtags').props.value).toBe(content.hashtags.join(' '));
     expect(requestReportContent).toHaveBeenCalledWith(
       { title: '', category: 'pothole', description: 'A pothole is visible in the road surface.' },
       'supabase-storage://private-issue-photos/user/issues/request-ai.jpg',

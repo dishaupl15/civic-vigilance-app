@@ -54,8 +54,13 @@ test('shows the post and photo preview and waits for explicit confirmation', asy
   expect(mockPublish).toHaveBeenCalledWith('report-id');
 });
 
-test('disables publishing while waiting and shows the confirmed post link', async () => {
-  let resolvePublication!: (value: { status: 'published'; alreadyPublished: boolean; postUrl: string }) => void;
+test('waits for Bluesky confirmation, then shows the returned post ID and link', async () => {
+  let resolvePublication!: (value: {
+    status: 'published';
+    alreadyPublished: boolean;
+    postUri: string;
+    postUrl: string;
+  }) => void;
   mockPublish.mockReturnValue(new Promise((resolve) => { resolvePublication = resolve; }));
   const screen = render(
     <BlueskyPublishCard issueId="report-id" title="Overflowing roadside waste" description="Mixed waste." />
@@ -73,9 +78,12 @@ test('disables publishing while waiting and shows the confirmed post link', asyn
     resolvePublication({
       status: 'published',
       alreadyPublished: false,
+      postUri: 'at://did:plc:civic/app.bsky.feed.post/postkey',
       postUrl: 'https://bsky.app/profile/civic.bsky.social/post/postkey',
     });
   });
+  expect(screen.getByText(/Bluesky confirmed publication by the official account/)).toBeTruthy();
+  expect(screen.getByText(/at:\/\/did:plc:civic\/app\.bsky\.feed\.post\/postkey/)).toBeTruthy();
   expect(screen.getByText('View published Bluesky post')).toBeTruthy();
 });
 

@@ -90,6 +90,8 @@ export default function Stage2DetailsScreen({
   const [locationSource, setLocationSource] = useState<'gps' | 'manual'>(
     initialLocationSource || (coords ? 'gps' : 'manual')
   );
+  const addressEdited = useRef(false);
+  const coordinatesEdited = useRef(false);
   const parsedCoordinates = parseOptionalCoordinates(latitude, longitude);
   const currentCoords = parsedCoordinates.coordinates;
   const normalizedAddress = normalizeReportAddress(address);
@@ -113,6 +115,15 @@ export default function Stage2DetailsScreen({
   const [recommendationsContext, setRecommendationsContext] = useState<string | null>(
     initialAuthoritySuggestions.length ? currentRecommendationContext : null
   );
+
+  useEffect(() => {
+    if (!addressEdited.current && initialAddress) setAddress(initialAddress);
+    if (!coordinatesEdited.current && coords) {
+      setLatitude(String(coords.lat));
+      setLongitude(String(coords.lng));
+      if (initialLocationSource !== 'manual') setLocationSource('gps');
+    }
+  }, [initialAddress, coords?.lat, coords?.lng, initialLocationSource]);
 
   useEffect(() => {
     let active = true;
@@ -255,11 +266,39 @@ export default function Stage2DetailsScreen({
           </View>
           {editingLocation ? (
             <>
-              <TextInput style={[styles.input, styles.textAreaSmall]} value={address} onChangeText={setAddress} multiline maxLength={300} placeholder="Street, landmark, city and state" />
+              <TextInput
+                style={[styles.input, styles.textAreaSmall]}
+                value={address}
+                onChangeText={(value) => {
+                  addressEdited.current = true;
+                  setAddress(value);
+                }}
+                multiline
+                maxLength={300}
+                placeholder="Street, landmark, city and state"
+              />
               {!!addressError && <Text style={styles.locationHint}>Enter the report location to continue. GPS coordinates are optional.</Text>}
               <View style={styles.coordinateRow}>
-                <TextInput style={[styles.input, styles.coordinateInput]} value={latitude} onChangeText={setLatitude} keyboardType="numbers-and-punctuation" placeholder="Latitude (optional)" />
-                <TextInput style={[styles.input, styles.coordinateInput]} value={longitude} onChangeText={setLongitude} keyboardType="numbers-and-punctuation" placeholder="Longitude (optional)" />
+                <TextInput
+                  style={[styles.input, styles.coordinateInput]}
+                  value={latitude}
+                  onChangeText={(value) => {
+                    coordinatesEdited.current = true;
+                    setLatitude(value);
+                  }}
+                  keyboardType="numbers-and-punctuation"
+                  placeholder="Latitude (optional)"
+                />
+                <TextInput
+                  style={[styles.input, styles.coordinateInput]}
+                  value={longitude}
+                  onChangeText={(value) => {
+                    coordinatesEdited.current = true;
+                    setLongitude(value);
+                  }}
+                  keyboardType="numbers-and-punctuation"
+                  placeholder="Longitude (optional)"
+                />
               </View>
             </>
           ) : <Text style={styles.address}>{address}</Text>}

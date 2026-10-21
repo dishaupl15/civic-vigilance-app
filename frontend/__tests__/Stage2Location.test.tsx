@@ -36,6 +36,42 @@ function fillRequiredFields(
 }
 
 describe('Stage2DetailsScreen location confirmation', () => {
+  it('populates a late captured GPS address and coordinates without replacing user edits', () => {
+    const baseProps = {
+      photos: ['file:///evidence.jpg'],
+      initialAddress: '',
+      coords: null as { lat: number; lng: number } | null,
+      onContinue: jest.fn(),
+      onBack: jest.fn(),
+    };
+    const screen = render(<Stage2DetailsScreen {...baseProps} />);
+    screen.rerender(
+      <Stage2DetailsScreen
+        {...baseProps}
+        initialAddress="Central Mumbai"
+        coords={gpsCoords}
+        accuracy={18}
+      />
+    );
+    expect(screen.getByPlaceholderText('Street, landmark, city and state').props.value)
+      .toBe('Central Mumbai');
+    expect(screen.getByPlaceholderText('Latitude (optional)').props.value).toBe('19.076');
+    expect(screen.getByPlaceholderText('Longitude (optional)').props.value).toBe('72.8777');
+
+    fireEvent.changeText(screen.getByPlaceholderText('Street, landmark, city and state'), 'My corrected address');
+    screen.rerender(
+      <Stage2DetailsScreen
+        {...baseProps}
+        initialAddress="Later geocoded address"
+        coords={{ lat: 19.08, lng: 72.88 }}
+        accuracy={12}
+      />
+    );
+    expect(screen.getByPlaceholderText('Street, landmark, city and state').props.value)
+      .toBe('My corrected address');
+    expect(screen.getByPlaceholderText('Latitude (optional)').props.value).toBe('19.08');
+  });
+
   it('restores saved report details and selections when returning to edit', async () => {
     const authority = {
       id: 'authority-1',

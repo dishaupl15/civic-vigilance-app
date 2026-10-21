@@ -26,6 +26,8 @@ export default function BlueskyPublishCard({ issueId, title, description, photoU
   const previewText = formatBlueskyPostPreview(title, description);
   const [publishing, setPublishing] = useState(false);
   const [postUrl, setPostUrl] = useState('');
+  const [postUri, setPostUri] = useState('');
+  const [publicationConfirmed, setPublicationConfirmed] = useState(false);
   const [error, setError] = useState('');
   const [confirming, setConfirming] = useState(false);
   const [availability, setAvailability] = useState<BlueskyAvailability | null>(null);
@@ -62,8 +64,11 @@ export default function BlueskyPublishCard({ issueId, title, description, photoU
     try {
       const publication = await publishIssueToBluesky(issueId);
       setPostUrl(publication.postUrl);
+      setPostUri(publication.postUri || '');
       if (publication.alreadyPublished) {
         setError('This report was already published. No duplicate post was created.');
+      } else {
+        setPublicationConfirmed(true);
       }
     } catch (publishError) {
       setError(publishError instanceof Error
@@ -138,6 +143,12 @@ export default function BlueskyPublishCard({ issueId, title, description, photoU
         </Text>
       ) : null}
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
+      {publicationConfirmed ? (
+        <Text accessibilityRole="alert" style={styles.success}>
+          Bluesky confirmed publication by the official account.
+          {postUri ? ` Post ID: ${postUri}` : ''}
+        </Text>
+      ) : null}
       {confirming && !postUrl ? (
         <View style={styles.confirmation}>
           <Text style={styles.confirmationText}>
@@ -223,6 +234,7 @@ const styles = StyleSheet.create({
   noPhoto: { ...Typography.caption, color: Colors.textSecondary, marginTop: 8 },
   statusText: { ...Typography.caption, color: Colors.textSecondary, marginBottom: 10 },
   error: { ...Typography.caption, color: Colors.error, marginBottom: 10 },
+  success: { ...Typography.caption, color: Colors.success, marginBottom: 10 },
   confirmation: {
     padding: 12,
     marginBottom: 8,

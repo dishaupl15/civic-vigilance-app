@@ -44,7 +44,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-async function authenticatedRequest(path: string, init?: RequestInit): Promise<Record<string, unknown>> {
+async function authenticatedRequest(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = 15_000,
+): Promise<Record<string, unknown>> {
   const apiBase = resolveNodeApiBaseUrl(process.env.EXPO_PUBLIC_NODE_API_URL, __DEV__);
   if (!apiBase) throw new Error('Bluesky publishing is unavailable because the backend URL is not configured.');
   if (getBackend() !== 'supabase') {
@@ -57,17 +61,25 @@ async function authenticatedRequest(path: string, init?: RequestInit): Promise<R
   }
 
   let response: Response;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     response = await fetch(`${apiBase.replace(/\/$/, '')}${path}`, {
       ...init,
+      signal: controller.signal,
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${data.session.access_token}`,
         ...(init?.headers || {}),
       },
     });
-  } catch {
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === 'AbortError') {
+      throw new Error('Bluesky request timed out. Check the official account before retrying.');
+    }
     throw new Error('Could not reach the Civic Vigilance backend. Check your connection and try again.');
+  } finally {
+    clearTimeout(timer);
   }
   const body: unknown = await response.json().catch(() => ({}));
   if (!isRecord(body)) throw new Error('Bluesky publishing returned an invalid response.');
@@ -83,7 +95,7 @@ export async function publishIssueToBluesky(issueId: string): Promise<BlueskyPub
   const body = await authenticatedRequest('/social/bluesky/publish', {
     method: 'POST',
     body: JSON.stringify({ issue_id: issueId }),
-  });
+  }, 60_000);
   if (body.status !== 'published'
       || typeof body.alreadyPublished !== 'boolean'
       || typeof body.postUrl !== 'string') {

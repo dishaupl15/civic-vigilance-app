@@ -7,7 +7,7 @@
  * → Stage 4 (Preview) → Stage 5 (Success)
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../hooks/useAuth';
@@ -98,6 +98,20 @@ export default function ReportIssueScreenV2() {
     setReportData((current) => ({ ...current, photos, coords, address, locationAccuracy: accuracy }));
     setCurrentStage(2);
   };
+
+  const handleLocationUpdate = useCallback((
+    coords: { lat: number; lng: number } | null,
+    address: string,
+    accuracy?: number
+  ) => {
+    setReportData((current) => ({
+      ...current,
+      coords,
+      address: address || current.address,
+      locationAccuracy: accuracy,
+      locationSource: 'gps',
+    }));
+  }, []);
 
   // Stage 2: Details -> Stage 3: Privacy
   const handleStage2Complete = (data: {
@@ -311,6 +325,7 @@ export default function ReportIssueScreenV2() {
       {currentStage === 1 && (
         <Stage1CameraScreen
           onContinue={handleStage1Complete}
+          onLocationUpdate={handleLocationUpdate}
           onCancel={() => navigation.goBack()}
         />
       )}

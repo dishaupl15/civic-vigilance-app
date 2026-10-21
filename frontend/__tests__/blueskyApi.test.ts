@@ -37,9 +37,10 @@ test('publishes by authenticated report ID and accepts only the confirmed Bluesk
     }),
   }) as jest.Mock;
 
-  await expect(publishIssueToBluesky('report-123')).resolves.toMatchObject({
+  await expect(publishIssueToBluesky('report-123')).resolves.toEqual({
     status: 'published',
     alreadyPublished: false,
+    postUri: 'at://did:plc:civic/app.bsky.feed.post/postkey',
     postUrl: 'https://bsky.app/profile/did:plc:civic/post/postkey',
   });
   expect(global.fetch).toHaveBeenCalledWith(
@@ -48,6 +49,7 @@ test('publishes by authenticated report ID and accepts only the confirmed Bluesk
       method: 'POST',
       headers: expect.objectContaining({ authorization: 'Bearer test-user-token' }),
       body: JSON.stringify({ issue_id: 'report-123' }),
+      signal: expect.any(AbortSignal),
     })
   );
 });
@@ -82,4 +84,26 @@ test('accepts the safe public account handle from availability', async () => {
     accountHandle: '@civic.bsky.social',
     eligible: true,
   });
+});
+
+test('times out a publication request with a safe warning to check the official account', async () => {
+  jest.useFakeTimers();
+  global.fetch = jest.fn((_input, init) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => {
+      const error = new Error('aborted');
+      error.name = 'AbortError';
+      reject(error);
+    }, { once: true });
+  })) as jest.Mock;
+
+  try {
+    const request = publishIssueToBluesky('report-123');
+    const timedOut = expect(request).rejects.toThrow(
+      'Bluesky request timed out. Check the official account before retrying.',
+    );
+    await jest.advanceTimersByTimeAsync(60_000);
+    await timedOut;
+  } finally {
+    jest.useRealTimers();
+  }
 });

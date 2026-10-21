@@ -10,7 +10,7 @@
  * - Gallery import option
  */
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -36,10 +36,15 @@ interface Props {
     address: string,
     accuracy?: number
   ) => void;
+  onLocationUpdate: (
+    coords: { lat: number; lng: number } | null,
+    address: string,
+    accuracy?: number
+  ) => void;
   onCancel?: () => void;
 }
 
-export default function Stage1CameraScreen({ onContinue, onCancel }: Props) {
+export default function Stage1CameraScreen({ onContinue, onLocationUpdate, onCancel }: Props) {
   const [photos, setPhotos] = useState<string[]>([]);
   const [facing, setFacing] = useState<'back' | 'front'>(Platform.OS === 'web' ? 'front' : 'back');
   const [flash, setFlash] = useState<'off' | 'on'>('off');
@@ -48,6 +53,7 @@ export default function Stage1CameraScreen({ onContinue, onCancel }: Props) {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [camPermission, requestCamPermission] = useCameraPermissions();
   const cameraRef = useRef<any>(null);
+  const autoLocationRequested = useRef(false);
   const {
     coords,
     address,
@@ -60,6 +66,17 @@ export default function Stage1CameraScreen({ onContinue, onCancel }: Props) {
     openLocationSettings,
   } = useLiveLocation();
   const permissionBlocked = permissionStatus === 'denied' && !canAskAgain;
+
+  useEffect(() => {
+    if (coords || address) onLocationUpdate(coords ? { lat: coords.lat, lng: coords.lng } : null, address, accuracy);
+  }, [coords, address, accuracy, onLocationUpdate]);
+
+  useEffect(() => {
+    if (photos.length > 0 && !autoLocationRequested.current) {
+      autoLocationRequested.current = true;
+      if (!coords) void requestLocation();
+    }
+  }, [photos.length, coords, requestLocation]);
 
   const ensureCameraPermission = async () => {
     if (camPermission?.granted) return true;
@@ -212,7 +229,10 @@ export default function Stage1CameraScreen({ onContinue, onCancel }: Props) {
             </View>
           )}
           <Pressable
-            onPress={() => void (permissionBlocked ? openLocationSettings() : requestLocation())}
+            onPress={() => {
+              autoLocationRequested.current = true;
+              void (permissionBlocked ? openLocationSettings() : requestLocation());
+            }}
             disabled={locationLoading}
             style={styles.locationAction}
             accessibilityRole="button"
