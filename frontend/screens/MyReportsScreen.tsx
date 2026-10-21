@@ -48,7 +48,7 @@ export default function MyReportsScreen({ navigation }: any) {
         if (active) setData(all.map(mapLocalIssueRow));
       } else if (isSupabaseConfigured) {
         const { data: rows, error: queryError } = await supabase
-          .from('issues') // actually reports in v2? check schema
+          .from('issues')
           .select('*,issue_metrics(upvotes,downvotes,comments,shares,twitter_impressions)')
           .eq('user_id', session.user.id)
           .order('created_at', { ascending: false });

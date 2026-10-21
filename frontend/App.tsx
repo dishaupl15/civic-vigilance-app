@@ -54,6 +54,8 @@ import PrivacyPolicyScreen from './screens/PrivacyPolicyScreen';
 import UpdatePasswordScreen from './screens/UpdatePasswordScreen';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import Button from './components/ui/Button';
+import { isSupabaseConfigured } from './lib/supabase';
+import { getBackend } from './lib/backend';
 
 const RootStack = createNativeStackNavigator();
 const FeedStack = createNativeStackNavigator();
@@ -208,6 +210,17 @@ export function Root() {
       <View style={styles.loadingContainer}>
         <Text style={styles.loadingText}>Loading Civic Vigilance...</Text>
         <Text style={styles.loadingHint}>Initializing backend...</Text>
+      </View>
+    );
+  }
+
+  if (getBackend() === 'supabase' && !isSupabaseConfigured) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Text style={styles.errorTitle}>Service configuration unavailable</Text>
+        <Text style={styles.errorText}>
+          This build is missing valid Supabase configuration. Please install a correctly configured release.
+        </Text>
       </View>
     );
   }

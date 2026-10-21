@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "check:env": "node scripts/validate-production-env.js",
+    "check:supabase-schema": "node scripts/check-supabase-schema.js",
+    "eas-build-pre-install": "node scripts/validate-production-env.js --no-local-env && node scripts/check-supabase-schema.js",
     "verify:production": "npm run typecheck && npm test -- --runInBand && npm run check:env"
   },
   "dependencies": {

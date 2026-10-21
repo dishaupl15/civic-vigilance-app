@@ -87,11 +87,16 @@ test('GET /api/health returns machine-readable health', async () => {
 });
 
 test.each([
+  ['GET', '/api/report-ai/capabilities'],
+  ['GET', '/api/account/export'],
   ['POST', '/api/x/connect'],
   ['GET', '/api/x/connection'],
   ['DELETE', '/api/x/connection'],
+  ['DELETE', '/api/account'],
   ['POST', '/api/social/bluesky/publish'],
   ['GET', '/api/social/bluesky/status?issue_id=11111111-1111-4111-8111-111111111111'],
+  ['POST', '/api/analyze-image'],
+  ['POST', '/api/generate-report-content'],
 ])('%s %s requires authentication', async (method, path) => {
   const response = await request(path, { method });
   expect(response.status).toBe(401);

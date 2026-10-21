@@ -200,7 +200,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     callbackHandler.current = createAuthCallbackHandler({
       exchangeCodeForSession: async (code) => {
         const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-        return { error, redirectType: data?.redirectType };
+        const redirectType = data && 'redirectType' in data && typeof data.redirectType === 'string'
+          ? data.redirectType
+          : undefined;
+        return { error, redirectType };
       },
       verifyOtp: async (tokenHash, type) => {
         const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type });

@@ -30,6 +30,8 @@ jest.mock('@react-navigation/bottom-tabs', () => {
 });
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('../hooks/useAuth', () => ({ useAuth: jest.fn() }));
+jest.mock('../lib/supabase', () => ({ isSupabaseConfigured: true }));
+jest.mock('../lib/backend', () => ({ getBackend: () => 'supabase' }));
 jest.mock('../screens/LoginScreen', () => ({ __esModule: true, default: () => null }));
 jest.mock('../screens/SignupScreen', () => ({ __esModule: true, default: () => null }));
 jest.mock('../screens/ForgotPasswordScreen', () => ({ __esModule: true, default: () => null }));
@@ -48,8 +50,30 @@ jest.mock('../screens/PrivacyPolicyScreen', () => ({ __esModule: true, default: 
 jest.mock('../screens/UpdatePasswordScreen', () => ({ __esModule: true, default: () => null }));
 
 const mockUseAuth = jest.requireMock('../hooks/useAuth').useAuth;
+const mockSupabase = jest.requireMock('../lib/supabase');
 
 describe('authenticated route protection', () => {
+  afterEach(() => {
+    mockSupabase.isSupabaseConfigured = true;
+  });
+
+  test('shows a configuration error instead of opening a disconnected app', () => {
+    mockSupabase.isSupabaseConfigured = false;
+    mockUseAuth.mockReturnValue({
+      session: null,
+      profile: null,
+      isLoading: false,
+      isPasswordRecovery: false,
+      authCallbackError: null,
+      clearAuthCallbackError: jest.fn(),
+    });
+
+    const screen = render(<Root />);
+
+    expect(screen.getByText('Service configuration unavailable')).toBeTruthy();
+    expect(screen.queryByText('Auth')).toBeNull();
+  });
+
   test('shows authentication routes when no session exists', () => {
     mockUseAuth.mockReturnValue({
       session: null,

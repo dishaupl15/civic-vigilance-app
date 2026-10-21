@@ -41,4 +41,25 @@ describe('Supabase client configuration', () => {
       }),
     );
   });
+
+  test('does not return a success-shaped client when Supabase is unconfigured', () => {
+    delete process.env.EXPO_PUBLIC_SUPABASE_URL;
+    delete process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    const createClient = jest.fn();
+    jest.doMock('react-native-url-polyfill/auto', () => ({}));
+    jest.doMock('@supabase/supabase-js', () => ({ createClient }));
+    jest.doMock('@react-native-async-storage/async-storage', () => ({
+      __esModule: true,
+      default: {},
+    }));
+
+    jest.isolateModules(() => {
+      const { isSupabaseConfigured, supabase } = require('../lib/supabase');
+
+      expect(isSupabaseConfigured).toBe(false);
+      expect(() => supabase.from('issues')).toThrow('Supabase is not configured.');
+    });
+
+    expect(createClient).not.toHaveBeenCalled();
+  });
 });

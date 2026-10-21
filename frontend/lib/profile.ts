@@ -48,7 +48,7 @@ export async function loadProfile(userId: string): Promise<UserProfile> {
 
   // Supabase backend
   if (!isSupabaseConfigured) {
-    return { id: userId, full_name: 'Civic User', photoURL: undefined, createdAt: new Date() } as unknown as UserProfile;
+    throw new Error('Supabase is not configured. Profile data could not be loaded.');
   }
 
   return withRetry(async () => {

@@ -30,6 +30,51 @@ The repository-side production controls are implemented. Values marked **require
 
 Never expose `SUPABASE_SECRET_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, database passwords, access tokens, or AI keys through an `EXPO_PUBLIC_*` variable.
 
+## 1.1 Android release builds and EAS environments
+
+The `preview` and `production` EAS profiles use separate EAS environments; a
+local `frontend/.env` is not a substitute for configuring those environments
+on the Expo project. Set the public variables from the credential map in both
+EAS environments. `EXPO_PUBLIC_NODE_API_URL` must use the separate deployed
+backend's public URL ending in `/api`, not the production web app origin.
+Keep backend-only secrets out of Expo/EAS frontend variables. The build
+pre-install hook validates HTTPS URLs, rejects localhost and private local
+hosts, requires the Functions URL to target the same Supabase project, and
+rejects service-role keys.
+
+Both Android release profiles produce installable APKs. Run the local checks
+from `frontend` before building:
+
+```powershell
+npm run typecheck
+npm test -- --runInBand
+npm run check:env
+npx eas-cli@latest build --platform android --profile preview
+npx eas-cli@latest build --platform android --profile production
+```
+
+Before release, verify the exact EAS environment the APK will use without
+printing its variable values:
+
+```powershell
+npx eas-cli@latest env:exec preview "node scripts/check-supabase-schema.js" --non-interactive
+npx eas-cli@latest env:exec production "node scripts/check-supabase-schema.js" --non-interactive
+```
+
+The schema check performs zero-row PostgREST selects against the report,
+engagement, profile, notification, and owner-scoped report tables. It does not
+read report data or write to the database. It also verifies the Node API health
+response, checks the frontend-used Node API routes with their expected HTTP
+methods, confirms protected routes require authentication, and verifies the
+public OAuth callback is routed to the application. A health-only success is
+not sufficient to approve the configured API endpoint.
+
+The Android application ID remains `com.anonymous.civicvigilance` to preserve
+updates to existing Android installations. Production APKs are for direct
+installation/distribution. Google Play submissions generally require an
+Android App Bundle (AAB), so use a separate store build profile if Play Store
+submission is needed.
+
 X sharing opens the user's composer. Direct post publishing is not implemented.
 X account linking is available only after the server-side OAuth configuration
 below is complete.
