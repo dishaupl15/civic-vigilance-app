@@ -1,0 +1,15 @@
+ frontend/__tests__/FeedScreen.test.tsx             |  48 [32m+++++++++[m
+ frontend/__tests__/useIssues.test.tsx              |  38 [32m++++[m[31m---[m
+ frontend/android/app/build.gradle                  |   2 [32m+[m[31m-[m
+ frontend/android/app/src/main/AndroidManifest.xml  |   1 [31m-[m
+ .../android/app/src/main/res/values/strings.xml    |   2 [32m+[m[31m-[m
+ frontend/app.json                                  |   8 [32m+[m[31m-[m
+ frontend/hooks/useIssues.ts                        | 112 [32m++[m[31m-------------------[m
+ frontend/lib/sqliteIssues.ts                       |  17 [31m----[m
+ frontend/lib/supabaseError.ts                      |  20 [32m++++[m
+ frontend/lib/votes.ts                              |  25 [31m-----[m
+ frontend/screens/FeedScreen.tsx                    |  53 [32m++++++++[m[31m--[m
+ frontend/screens/MyReportsScreen.tsx               |  81 [32m+++++++++[m[31m------[m
+ frontend/screens/PostDetailScreen.tsx              |  91 [32m+++++++[m[31m----------[m
+ frontend/scripts/check-supabase-schema.js          |  62 [32m++++++++++++[m
+ 14 files changed, 298 insertions(+), 262 deletions(-)
