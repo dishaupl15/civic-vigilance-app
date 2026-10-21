@@ -42,7 +42,10 @@ app.use((error, _req, res, _next) => {
   const candidateStatus = Number.isInteger(error.status) ? error.status : 500;
   const status = candidateStatus >= 400 && candidateStatus <= 599 ? candidateStatus : 500;
   if (status >= 500) console.error(`[API] Request ${_req.requestId || 'unknown'} failed:`, error.message);
-  res.status(status).json({ error: status >= 500 ? 'The service is temporarily unavailable.' : error.message });
+  const message = status >= 500
+    ? (typeof error.safeMessage === 'string' ? error.safeMessage : 'The service is temporarily unavailable.')
+    : error.message;
+  res.status(status).json({ error: message });
 });
 
 module.exports = app;

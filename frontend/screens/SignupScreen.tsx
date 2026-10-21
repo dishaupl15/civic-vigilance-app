@@ -16,22 +16,45 @@ import TextField from '../components/ui/TextField';
 import Button from '../components/ui/Button';
 import { BorderRadius, Colors, Shadows, Spacing, Typography } from '../constants/DesignSystem';
 import { getBackend } from '../lib/backend';
-import { validateEmail, validateNewPassword } from '../lib/authValidation';
+import {
+  normalizePhoneNumber,
+  validateEmail,
+  validateNewPassword,
+  validatePersonName,
+  validatePhoneNumber,
+} from '../lib/authValidation';
+import { validateUsername } from '../lib/username';
 
 export default function SignupScreen() {
   const { signUp } = useAuth();
   const navigation = useNavigation<NativeStackNavigationProp<any>>();
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [profileSaveFailed, setProfileSaveFailed] = useState(false);
   const [confirmationNotice, setConfirmationNotice] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const submittingRef = useRef(false);
 
   const onSubmit = async () => {
+    const firstNameError = validatePersonName(firstName, 'First name');
+    if (firstNameError) return setError(firstNameError);
+    const lastNameError = validatePersonName(lastName, 'Last name');
+    if (lastNameError) return setError(lastNameError);
     const emailError = validateEmail(email);
     if (emailError) return setError(emailError);
+    const normalizedUsername = username.trim().toLowerCase();
+    if (normalizedUsername) {
+      const usernameValidation = validateUsername(normalizedUsername);
+      if (!usernameValidation.isValid) return setError(usernameValidation.error || 'Enter a valid username.');
+    }
+    const phoneError = validatePhoneNumber(phoneNumber);
+    if (phoneError) return setError(phoneError);
     const passwordError = validateNewPassword(password, confirm);
     if (passwordError) return setError(passwordError);
 
@@ -39,11 +62,18 @@ export default function SignupScreen() {
     submittingRef.current = true;
     setIsLoading(true);
     setError(null);
+    setProfileSaveFailed(false);
     setConfirmationNotice(null);
     try {
-      const res = await signUp(email.trim(), password);
+      const res = await signUp(email.trim(), password, {
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        ...(normalizedUsername ? { username: normalizedUsername } : {}),
+        ...(phoneNumber.trim() ? { phone_number: normalizePhoneNumber(phoneNumber) } : {}),
+      });
       if (res?.error) {
         setError(res.error);
+        setProfileSaveFailed(res.code === 'auth/profile-save-failed' && Boolean(res.data?.session));
       } else if (res?.data?.user && Array.isArray(res.data.user.identities) && res.data.user.identities.length === 0) {
         setError('An account with this email already exists. Try signing in or resetting your password.');
       } else if (res?.data?.user && !res.data.session) {
@@ -82,6 +112,14 @@ export default function SignupScreen() {
             )}
 
             {!!error && <Text style={styles.error} accessibilityRole="alert">{error}</Text>}
+            {profileSaveFailed && (
+              <Button
+                title="Complete profile now"
+                onPress={() => navigation.navigate('Profile', { screen: 'ProfileHome' })}
+                variant="outline"
+                style={{ marginBottom: Spacing.md }}
+              />
+            )}
             {!!confirmationNotice && (
               <Text style={styles.confirmationNotice} accessibilityRole="alert">
                 {confirmationNotice}
@@ -89,7 +127,29 @@ export default function SignupScreen() {
             )}
 
             <TextField
-              label="Email"
+              label="First name *"
+              placeholder="First name"
+              value={firstName}
+              onChangeText={setFirstName}
+              autoCapitalize="words"
+              autoCorrect={false}
+              textContentType="givenName"
+              editable={!isLoading}
+              returnKeyType="next"
+            />
+            <TextField
+              label="Last name *"
+              placeholder="Last name"
+              value={lastName}
+              onChangeText={setLastName}
+              autoCapitalize="words"
+              autoCorrect={false}
+              textContentType="familyName"
+              editable={!isLoading}
+              returnKeyType="next"
+            />
+            <TextField
+              label="Email address *"
               placeholder="you@example.com"
               autoCapitalize="none"
               autoCorrect={false}
@@ -99,6 +159,30 @@ export default function SignupScreen() {
               onChangeText={setEmail}
               editable={!isLoading}
             />
+            <TextField
+              label="Username (optional)"
+              placeholder="civic_user"
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="username"
+              value={username}
+              onChangeText={setUsername}
+              editable={!isLoading}
+              maxLength={20}
+              returnKeyType="next"
+            />
+            <TextField
+              label="Phone number (optional)"
+              placeholder="+14155552671"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="phone-pad"
+              textContentType="telephoneNumber"
+              value={phoneNumber}
+              onChangeText={setPhoneNumber}
+              editable={!isLoading}
+            />
+            <Text style={styles.passwordHint}>Include your country code, for example +14155552671.</Text>
             <TextField
               label="Password"
               placeholder="Enter at least 8 characters"

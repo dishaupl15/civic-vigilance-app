@@ -11,6 +11,8 @@
 
 import React, { useEffect, useState } from 'react';
 import { ScrollView, View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Switch, Alert, ActivityIndicator, Share, Platform } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import * as Linking from 'expo-linking';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -185,6 +187,15 @@ export default function SettingsScreen() {
   };
 
   const handleLogout = () => {
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm('Are you sure you want to logout?')) {
+        void signOut().then((result) => {
+          if (result?.error) window.alert(`Logout failed: ${result.error}`);
+        });
+      }
+      return;
+    }
+
     Alert.alert(
       'Logout',
       'Are you sure you want to logout?',
@@ -259,8 +270,29 @@ export default function SettingsScreen() {
                 link.download = 'civic-vigilance-data-export.json';
                 link.click();
                 URL.revokeObjectURL(href);
+              } else if (Platform.OS === 'android') {
+                const permission = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+                if (!permission.granted) return;
+                const filename = `civic-vigilance-data-export-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+                const fileUri = await FileSystem.StorageAccessFramework.createFileAsync(
+                  permission.directoryUri,
+                  filename,
+                  'application/json'
+                );
+                await FileSystem.StorageAccessFramework.writeAsStringAsync(fileUri, json);
+                Alert.alert('Export saved', 'Your account data export was saved in the selected folder.');
               } else {
-                await Share.share({ title: 'Civic Vigilance data export', message: json });
+                if (!FileSystem.cacheDirectory) throw new Error('Temporary file storage is unavailable.');
+                const fileUri = `${FileSystem.cacheDirectory}civic-vigilance-data-export.json`;
+                await FileSystem.writeAsStringAsync(fileUri, json);
+                if (await Sharing.isAvailableAsync()) {
+                  await Sharing.shareAsync(fileUri, {
+                    mimeType: 'application/json',
+                    dialogTitle: 'Save Civic Vigilance data export',
+                  });
+                } else {
+                  await Share.share({ title: 'Civic Vigilance data export', message: json });
+                }
               }
             } catch (error: any) {
               Alert.alert('Export Failed', error?.message || 'Could not export your data.');

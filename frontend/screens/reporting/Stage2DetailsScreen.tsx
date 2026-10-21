@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Image,
@@ -32,9 +32,19 @@ import ReportAiAssistance from '../../components/reporting/ReportAiAssistance';
 
 interface Props {
   photos: string[];
+  initialTitle?: string;
+  initialCategory?: CategoryKey;
+  initialDescription?: string;
   initialAddress: string;
   coords: { lat: number; lng: number } | null;
   accuracy?: number;
+  initialLocationSource?: 'gps' | 'manual';
+  initialSelectedAuthorityHandles?: string[];
+  initialAuthoritySuggestions?: MatchedAuthority[];
+  requestId: string;
+  savedImageReference?: string;
+  savedImageUri?: string;
+  onImageReferenceChange: (reference?: string, photoUri?: string) => void;
   onGeneratedReportContent: (content: GeneratedReportContent) => void;
   onContinue: (data: {
     title: string;
@@ -53,43 +63,69 @@ interface Props {
 
 export default function Stage2DetailsScreen({
   photos,
+  initialTitle = '',
+  initialCategory = 'pothole',
+  initialDescription = '',
   initialAddress,
   coords,
   accuracy,
+  initialLocationSource,
+  initialSelectedAuthorityHandles = [],
+  initialAuthoritySuggestions = [],
+  requestId,
+  savedImageReference,
+  savedImageUri,
+  onImageReferenceChange,
   onGeneratedReportContent,
   onContinue,
   onBack,
 }: Props) {
-  const [title, setTitle] = useState('');
-  const [category, setCategory] = useState<CategoryKey>('pothole');
-  const [description, setDescription] = useState('');
+  const [title, setTitle] = useState(initialTitle);
+  const [category, setCategory] = useState<CategoryKey>(initialCategory);
+  const [description, setDescription] = useState(initialDescription);
   const [address, setAddress] = useState(initialAddress);
   const [editingLocation, setEditingLocation] = useState(!initialAddress);
   const [latitude, setLatitude] = useState(coords ? String(coords.lat) : '');
   const [longitude, setLongitude] = useState(coords ? String(coords.lng) : '');
+  const [locationSource, setLocationSource] = useState<'gps' | 'manual'>(
+    initialLocationSource || (coords ? 'gps' : 'manual')
+  );
   const parsedCoordinates = parseOptionalCoordinates(latitude, longitude);
   const currentCoords = parsedCoordinates.coordinates;
-  const [selectedAuthorityHandles, setSelectedAuthorityHandles] = useState<string[]>([]);
-  const [recommendations, setRecommendations] = useState<AuthorityRecommendations>(() => emptyAuthorityRecommendations(category));
-  const [recommendationsLoading, setRecommendationsLoading] = useState(false);
-  const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
-  const [recommendationRetry, setRecommendationRetry] = useState(0);
-  const [recommendationsContext, setRecommendationsContext] = useState<string | null>(null);
+  const normalizedAddress = normalizeReportAddress(address);
+  const addressError = validateReportAddress(normalizedAddress);
+  const canContinue = title.trim().length >= 10 && !!description.trim() && !addressError;
+  const [selectedAuthorityHandles, setSelectedAuthorityHandles] = useState<string[]>(initialSelectedAuthorityHandles);
   const currentRecommendationContext = JSON.stringify([
     currentCoords?.lat ?? null,
     currentCoords?.lng ?? null,
     address,
     category,
   ]);
+  const previousRecommendationContext = useRef(currentRecommendationContext);
+  const [recommendations, setRecommendations] = useState<AuthorityRecommendations>(() => ({
+    ...emptyAuthorityRecommendations(category),
+    accounts: initialAuthoritySuggestions,
+  }));
+  const [recommendationsLoading, setRecommendationsLoading] = useState(false);
+  const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
+  const [recommendationRetry, setRecommendationRetry] = useState(0);
+  const [recommendationsContext, setRecommendationsContext] = useState<string | null>(
+    initialAuthoritySuggestions.length ? currentRecommendationContext : null
+  );
 
   useEffect(() => {
     let active = true;
     const requestContext = currentRecommendationContext;
+    const contextChanged = previousRecommendationContext.current !== requestContext;
+    previousRecommendationContext.current = requestContext;
     setRecommendationsLoading(true);
     setRecommendationsError(null);
-    setRecommendations(emptyAuthorityRecommendations(category));
-    setRecommendationsContext(null);
-    setSelectedAuthorityHandles([]);
+    if (contextChanged) {
+      setRecommendations(emptyAuthorityRecommendations(category));
+      setRecommendationsContext(null);
+      setSelectedAuthorityHandles([]);
+    }
     const timer = setTimeout(() => {
       void getAuthorityRecommendations(currentCoords?.lat, currentCoords?.lng, address, category)
         .then((result) => {
@@ -124,14 +160,24 @@ export default function Stage2DetailsScreen({
     && currentCoords?.lat === coords.lat
     && currentCoords?.lng === coords.lng;
 
+  const toggleLocationEditing = () => {
+    if (!editingLocation) {
+      setEditingLocation(true);
+      return;
+    }
+    if (addressError) {
+      Alert.alert('Location Required', addressError);
+      return;
+    }
+    setEditingLocation(false);
+  };
+
   const handleContinue = () => {
     const normalizedTitle = title.trim();
-    const normalizedAddress = normalizeReportAddress(address);
     if (normalizedTitle.length < 10 || normalizedTitle.length > 100) {
       return Alert.alert('Title Length', 'Enter a factual title between 10 and 100 characters.');
     }
     if (!description.trim()) return Alert.alert('Description Required', 'Describe the visible civic issue.');
-    const addressError = validateReportAddress(normalizedAddress);
     if (addressError) return Alert.alert('Location Required', addressError);
 
     if (parsedCoordinates.error) return Alert.alert('Invalid Coordinates', parsedCoordinates.error);
@@ -144,8 +190,8 @@ export default function Stage2DetailsScreen({
       description: description.trim(),
       address: normalizedAddress,
       coords: currentCoords,
-      locationAccuracy: gpsCoordinatesUnchanged ? accuracy : undefined,
-      locationSource: gpsCoordinatesUnchanged ? 'gps' : 'manual',
+      locationAccuracy: gpsCoordinatesUnchanged && locationSource === 'gps' ? accuracy : undefined,
+      locationSource: gpsCoordinatesUnchanged ? locationSource : 'manual',
       locationConfirmed: true,
       selectedAuthorityHandles: selectedAuthorityHandles.filter((handle) =>
         availableAuthorities.some((authority) => authority.handle === handle)
@@ -188,9 +234,14 @@ export default function Stage2DetailsScreen({
         </View>
 
         <ReportAiAssistance
+          photos={photos}
           title={title}
           category={category}
           description={description}
+          requestId={requestId}
+          savedImageReference={savedImageReference}
+          savedImageUri={savedImageUri}
+          onImageReferenceChange={onImageReferenceChange}
           onGenerated={onGeneratedReportContent}
           onUseTitle={setTitle}
           onUseDescription={setDescription}
@@ -200,11 +251,12 @@ export default function Stage2DetailsScreen({
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <Text style={styles.sectionTitle}>Location confirmation</Text>
-            <Pressable onPress={() => setEditingLocation((value) => !value)}><Text style={styles.link}>{editingLocation ? 'Done' : 'Edit'}</Text></Pressable>
+            <Pressable onPress={toggleLocationEditing}><Text style={styles.link}>{editingLocation ? 'Done' : 'Edit'}</Text></Pressable>
           </View>
           {editingLocation ? (
             <>
               <TextInput style={[styles.input, styles.textAreaSmall]} value={address} onChangeText={setAddress} multiline maxLength={300} placeholder="Street, landmark, city and state" />
+              {!!addressError && <Text style={styles.locationHint}>Enter the report location to continue. GPS coordinates are optional.</Text>}
               <View style={styles.coordinateRow}>
                 <TextInput style={[styles.input, styles.coordinateInput]} value={latitude} onChangeText={setLatitude} keyboardType="numbers-and-punctuation" placeholder="Latitude (optional)" />
                 <TextInput style={[styles.input, styles.coordinateInput]} value={longitude} onChangeText={setLongitude} keyboardType="numbers-and-punctuation" placeholder="Longitude (optional)" />
@@ -213,8 +265,10 @@ export default function Stage2DetailsScreen({
           ) : <Text style={styles.address}>{address}</Text>}
           <Text style={styles.meta}>
             {!currentCoords
-              ? 'No GPS coordinates; this address is manually confirmed'
-              : !gpsCoordinatesUnchanged
+              ? addressError
+                ? 'No GPS coordinates; enter a manual address'
+                : 'No GPS coordinates; this address is manually confirmed'
+                : !gpsCoordinatesUnchanged || locationSource === 'manual'
                 ? 'Coordinates entered manually'
                 : accuracy !== undefined
                   ? `GPS coordinates, accuracy ±${Math.round(accuracy)}m`
@@ -322,7 +376,16 @@ export default function Stage2DetailsScreen({
       </ScrollView>
       <View style={styles.bottomNav}>
         <Button title="Edit Photos" onPress={onBack} variant="outline" style={{ flex: 1 }} />
-        <Button title="Confirm & Continue" onPress={handleContinue} style={{ flex: 2 }} disabled={!title.trim() || !description.trim() || !address.trim()} />
+        <View style={{ flex: 2 }}>
+          <Button title="Confirm & Continue" onPress={handleContinue} disabled={!canContinue} />
+          {!canContinue && (
+            <Text style={styles.continueHint}>
+              {title.trim().length < 10 && 'Enter a title of at least 10 characters. '}
+              {!description.trim() && 'Enter visible details. '}
+              {addressError && 'Enter a street, landmark, or city/state in Location confirmation, then tap Done.'}
+            </Text>
+          )}
+        </View>
       </View>
     </KeyboardAvoidingView>
   );
@@ -342,6 +405,7 @@ const styles = StyleSheet.create({
   link: { marginTop: 8, fontSize: 14, color: Colors.primary, fontWeight: '600' },
   address: { fontSize: 15, color: Colors.textMain, fontWeight: '600' },
   meta: { marginTop: 8, fontSize: 12, color: Colors.textSecondary },
+  locationHint: { color: Colors.error, fontSize: 12, marginBottom: 8 },
   authoritySuggestion: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.border },
   authoritySelection: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   authoritySource: { paddingLeft: 30 },
@@ -351,4 +415,5 @@ const styles = StyleSheet.create({
   coordinateInput: { flex: 1, fontSize: 13 },
   mapLink: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6 },
   bottomNav: { position: 'absolute', left: 16, right: 16, bottom: 24, flexDirection: 'row', gap: 12, backgroundColor: Colors.surface, padding: 12, borderRadius: BorderRadius.md, ...Shadows.lg },
+  continueHint: { color: Colors.textSecondary, fontSize: 10, textAlign: 'center', paddingTop: 4 },
 });

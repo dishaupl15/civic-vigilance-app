@@ -19,7 +19,7 @@ import { User as ProfileUser } from '../types';
 import * as Crypto from 'expo-crypto';
 import { getBackend } from '../lib/backend';
 import { currentUserLocal, initAuth, signInLocal, signOutLocal, signUpLocal } from '../lib/sqliteAuth';
-import { loadProfile } from '../lib/profile';
+import { loadProfile, saveProfile } from '../lib/profile';
 import { sha256 } from 'js-sha256';
 import {
   createAuthCallbackHandler,
@@ -57,7 +57,14 @@ type AuthSession = SimpleSession | null;
 
 interface SignupResponseData {
   session: unknown;
-  user?: { identities?: unknown[] | null } | null;
+  user?: { id?: string; identities?: unknown[] | null } | null;
+}
+
+interface SignupProfileInput {
+  first_name: string;
+  last_name: string;
+  username?: string;
+  phone_number?: string;
 }
 
 interface AuthContextType {
@@ -69,7 +76,7 @@ interface AuthContextType {
   authCallbackError: string | null;
   signIn: (email: string, password: string) => Promise<{ error?: string; code?: string } | undefined>;
   signInAsGuest: () => Promise<{ error?: string; code?: string } | undefined>;
-  signUp: (email: string, password: string) => Promise<{ data?: SignupResponseData; error?: string; code?: string }>;
+  signUp: (email: string, password: string, profile: SignupProfileInput) => Promise<{ data?: SignupResponseData; error?: string; code?: string }>;
   resetPassword: (email: string) => Promise<{ error?: string; code?: string } | undefined>;
   updatePassword: (password: string) => Promise<{ error?: string; code?: string } | undefined>;
   cancelPasswordRecovery: () => Promise<{ error?: string } | undefined>;
@@ -499,13 +506,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
      * @param password - User's password (minimum 8 characters)
      * @returns Error object if sign up fails, undefined if successful
      */
-    signUp: async (email: string, password: string) => {
+    signUp: async (email: string, password: string, profile: SignupProfileInput) => {
       if (getBackend() === 'sqlite') {
         const result = await signUpLocal(email.trim().toLowerCase(), password, email.split('@')[0]);
         if (result.error || !result.user) return { error: result.error || 'Failed to create local account', code: 'auth/local-error' };
         const localSession = { user: { id: String(result.user.id), email: result.user.email } };
         setSession(localSession);
-        setProfile({ id: String(result.user.id), username: result.user.email.split('@')[0], full_name: result.user.email.split('@')[0] } as any);
+        const profileId = String(result.user.id);
+        const fullName = `${profile.first_name.trim()} ${profile.last_name.trim()}`.trim();
+        const localProfile = {
+          id: profileId,
+          first_name: profile.first_name.trim(),
+          last_name: profile.last_name.trim(),
+          username: profile.username?.trim() || result.user.email.split('@')[0],
+          phone_number: profile.phone_number?.trim() || null,
+          full_name: fullName,
+        } as any;
+        await saveProfile(localProfile);
+        setProfile(localProfile);
         return { data: { session: localSession } };
       }
 
@@ -518,7 +536,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const { data, error } = await supabase.auth.signUp({
           email: email.trim().toLowerCase(),
           password,
-          options: { emailRedirectTo },
+          options: {
+            emailRedirectTo,
+            data: {
+              first_name: profile.first_name.trim(),
+              last_name: profile.last_name.trim(),
+              full_name: `${profile.first_name.trim()} ${profile.last_name.trim()}`.trim(),
+              ...(profile.username?.trim() ? { username: profile.username.trim().toLowerCase() } : {}),
+              ...(profile.phone_number?.trim() ? { phone_number: profile.phone_number.trim() } : {}),
+            },
+          },
         });
 
         if (error) {
@@ -527,6 +554,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             error: error.message || 'Failed to sign up',
             code: error.status?.toString() || 'auth/unknown-error',
           };
+        }
+
+        if (data.session && data.user?.id) {
+          try {
+            const firstName = profile.first_name.trim();
+            const lastName = profile.last_name.trim();
+            await saveProfile({
+              id: data.user.id,
+              first_name: firstName,
+              last_name: lastName,
+              full_name: `${firstName} ${lastName}`.trim(),
+              ...(profile.username?.trim() ? { username: profile.username.trim().toLowerCase() } : {}),
+              ...(profile.phone_number?.trim() ? { phone_number: profile.phone_number.trim() } : {}),
+            } as any);
+          } catch (profileError: any) {
+            const code = String(profileError?.code || profileError?.details || '');
+            const usernameConflict = code.includes('profiles_username') || code.includes('23505');
+            return {
+              data,
+              error: usernameConflict
+                ? 'Your account was created, but that username is already in use. Sign in and choose another username in Edit Profile.'
+                : 'Your account was created, but profile details could not be saved. Sign in and complete your profile in Edit Profile. Do not create another account.',
+              code: 'auth/profile-save-failed',
+            };
+          }
         }
 
         // Session will be updated by onAuthStateChange listener

@@ -14,6 +14,7 @@ import { CATEGORY_EMOJIS } from '../components/CategoryPicker';
 import { showShareDialog, composePostText } from '../lib/sharingEnhanced';
 import { mapDatabaseCommentRow, mapDatabaseIssueRow, mapLocalCommentRow, mapLocalIssueRow } from '../lib/issueMapper';
 import { loadIssueEnhancements, SavedIssueEnhancements } from '../lib/issueEnhancements';
+import BlueskyShareModal from '../components/reporting/BlueskyShareModal';
 
 export default function PostDetailScreen({ route }: any) {
   const { id } = route.params as { id: string };
@@ -34,6 +35,7 @@ export default function PostDetailScreen({ route }: any) {
   const [enhancementsLoading, setEnhancementsLoading] = useState(false);
   const [enhancementsError, setEnhancementsError] = useState<string | null>(null);
   const [enhancementRetry, setEnhancementRetry] = useState(0);
+  const [blueskyShareVisible, setBlueskyShareVisible] = useState(false);
   const { session, isGuest, signOut } = useAuth();
   const localUserId = Number(session?.user?.id || 1);
   const signOutForLogin = async () => {
@@ -291,7 +293,11 @@ export default function PostDetailScreen({ route }: any) {
       lng: issue.lng,
       category: issue.category,
     });
-    showShareDialog({ text: tweetText, imageUri: issue.imageUrl });
+    showShareDialog(
+      { text: tweetText, imageUri: issue.imageUrl },
+      undefined,
+      () => setBlueskyShareVisible(true)
+    );
   }, [id, issue]);
 
   const tree = useMemo(() => {
@@ -582,6 +588,15 @@ export default function PostDetailScreen({ route }: any) {
           </Pressable>
         </View>
       </View>
+
+      <BlueskyShareModal
+        visible={blueskyShareVisible}
+        issueId={issue.id}
+        title={issue.title || ''}
+        description={issue.description || ''}
+        photoUri={issue.imageUrl}
+        onClose={() => setBlueskyShareVisible(false)}
+      />
     </ScrollView>
   );
 }

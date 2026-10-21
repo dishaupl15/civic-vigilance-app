@@ -10,6 +10,7 @@ const mockSession = {
 };
 let mockAuthListener: ((event: string, session: typeof mockSession | null) => void) | null = null;
 let mockUrlListener: ((event: { url: string }) => void) | null = null;
+const signupProfile = { first_name: 'Civic', last_name: 'Citizen', username: 'civic_user', phone_number: '+14155552671' };
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
   __esModule: true,
@@ -47,7 +48,10 @@ jest.mock('expo-linking', () => ({
   }),
 }));
 jest.mock('../lib/backend', () => ({ getBackend: () => 'supabase' }));
-jest.mock('../lib/profile', () => ({ loadProfile: jest.fn(() => Promise.resolve(null)) }));
+jest.mock('../lib/profile', () => ({
+  loadProfile: jest.fn(() => Promise.resolve(null)),
+  saveProfile: jest.fn(() => Promise.resolve({ id: 'user-123' })),
+}));
 jest.mock('expo-crypto', () => ({ randomUUID: () => 'mock-uuid' }));
 jest.mock('../lib/sqliteAuth', () => ({
   currentUserLocal: jest.fn(),
@@ -59,6 +63,7 @@ jest.mock('../lib/sqliteAuth', () => ({
 
 const mockSupabaseAuth = jest.requireMock('../lib/supabase').supabase.auth;
 const mockLinking = jest.requireMock('expo-linking');
+const mockSaveProfile = jest.requireMock('../lib/profile').saveProfile;
 
 describe('Supabase auth context', () => {
   beforeEach(() => {
@@ -103,14 +108,23 @@ describe('Supabase auth context', () => {
     const { result } = await mountAuth();
 
     await act(async () => {
-      await result.current.signUp(' User@example.org ', 'StrongPass1');
+      await result.current.signUp(' User@example.org ', 'StrongPass1', signupProfile);
       await result.current.resetPassword('user@example.org');
     });
 
     expect(mockSupabaseAuth.signUp).toHaveBeenCalledWith({
       email: 'user@example.org',
       password: 'StrongPass1',
-      options: { emailRedirectTo: AUTH_CALLBACK_URL },
+      options: {
+        emailRedirectTo: AUTH_CALLBACK_URL,
+        data: {
+          first_name: 'Civic',
+          last_name: 'Citizen',
+          full_name: 'Civic Citizen',
+          username: 'civic_user',
+          phone_number: '+14155552671',
+        },
+      },
     });
     expect(mockSupabaseAuth.resetPasswordForEmail).toHaveBeenCalledWith(
       'user@example.org',
@@ -129,7 +143,7 @@ describe('Supabase auth context', () => {
     const { result } = await mountAuth();
 
     await act(async () => {
-      const signup = await result.current.signUp('user@example.org', 'StrongPass1');
+      const signup = await result.current.signUp('user@example.org', 'StrongPass1', signupProfile);
       expect(signup.data?.session).toEqual(mockSession);
     });
 
@@ -137,6 +151,14 @@ describe('Supabase auth context', () => {
       id: 'user-123',
       email: 'user@example.org',
     });
+    expect(mockSaveProfile).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'user-123',
+      first_name: 'Civic',
+      last_name: 'Citizen',
+      full_name: 'Civic Citizen',
+      username: 'civic_user',
+      phone_number: '+14155552671',
+    }));
   });
 
   test('does not authenticate when Supabase signup fails', async () => {
@@ -147,7 +169,7 @@ describe('Supabase auth context', () => {
     const { result } = await mountAuth();
 
     await act(async () => {
-      await expect(result.current.signUp('user@example.org', 'StrongPass1')).resolves.toMatchObject({
+      await expect(result.current.signUp('user@example.org', 'StrongPass1', signupProfile)).resolves.toMatchObject({
         error: 'Signup is unavailable',
         code: '500',
       });
@@ -164,12 +186,28 @@ describe('Supabase auth context', () => {
     const { result } = await mountAuth();
 
     await act(async () => {
-      const signup = await result.current.signUp('user@example.org', 'StrongPass1');
+      const signup = await result.current.signUp('user@example.org', 'StrongPass1', signupProfile);
       expect(signup.data?.user).toEqual(mockSession.user);
       expect(signup.data?.session).toBeNull();
     });
 
     expect(result.current.session).toBeNull();
+    expect(mockSaveProfile).not.toHaveBeenCalled();
+  });
+
+  test('keeps Auth success explicit when profile persistence needs a retry after signup', async () => {
+    mockSupabaseAuth.signUp.mockImplementation(async () => {
+      mockAuthListener?.('SIGNED_IN', mockSession);
+      return { data: { user: mockSession.user, session: mockSession }, error: null };
+    });
+    mockSaveProfile.mockRejectedValueOnce({ code: '23505' });
+    const { result } = await mountAuth();
+
+    await act(async () => {
+      await expect(result.current.signUp('user@example.org', 'StrongPass1', signupProfile))
+        .resolves.toMatchObject({ code: 'auth/profile-save-failed', error: expect.stringContaining('already in use') });
+    });
+    expect(result.current.session?.user.id).toBe('user-123');
   });
 
   test('restores a persisted session and clears it on logout', async () => {

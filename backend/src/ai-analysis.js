@@ -2,6 +2,7 @@ const ISSUE_CATEGORIES = new Set([
   'pothole', 'garbage', 'streetlight', 'drainage', 'water_supply', 'sewage',
   'traffic_signal', 'encroachment', 'stray_animals', 'parks', 'other',
 ]);
+const { generateGroqJson, isGroqConfigured } = require('./groq');
 
 function validateAnalysis(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('AI response must be an object');
@@ -20,11 +21,47 @@ function validateAnalysis(value) {
   };
 }
 
-async function analyzeImage({ imageUrl, signal }) {
+async function analyzeImage({ imageUrl, signal, fetchImpl = fetch }) {
+  if (isGroqConfigured()) {
+    const categories = [...ISSUE_CATEGORIES];
+    const schema = {
+      issue_category: `one of: ${categories.join(', ')}`,
+      description: 'string, only visible evidence, 3-1000 characters',
+      visible_evidence: 'string[] of visible details only',
+      confidence: 'number between 0 and 1',
+      needs_review: 'boolean',
+      uncertainties: 'string[]',
+    };
+    const analysis = await generateGroqJson({
+      imageUrl,
+      signal,
+      fetchImpl,
+      prompt: `Analyze the attached civic issue evidence photo. ${[
+        'Analyze this civic issue evidence photo for a citizen report.',
+        'Describe only visible evidence. Do not infer location, measurements, causes, ownership, liability, accidents, or responsible authorities.',
+        'For blurry, irrelevant, or ambiguous images, use a low confidence score, set needs_review to true, and explain uncertainty.',
+        `Choose issue_category from: ${categories.join(', ')}.`,
+        `Return a JSON object matching these fields and constraints: ${JSON.stringify(schema)}.`,
+      ].join(' ')}`,
+    });
+    return validateAnalysis(analysis);
+  }
+
   const endpoint = process.env.AI_VISION_ENDPOINT;
   const apiKey = process.env.AI_VISION_API_KEY;
   if (!endpoint || !apiKey) {
     const error = new Error('Image analysis is not configured. Continue with manual reporting.');
+    error.status = 503;
+    throw error;
+  }
+  let parsedEndpoint;
+  try {
+    parsedEndpoint = new URL(endpoint);
+  } catch {
+    parsedEndpoint = null;
+  }
+  if (!parsedEndpoint || parsedEndpoint.protocol !== 'https:' || parsedEndpoint.username || parsedEndpoint.password) {
+    const error = new Error('Image analysis endpoint must be a valid HTTPS URL.');
     error.status = 503;
     throw error;
   }

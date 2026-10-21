@@ -17,6 +17,7 @@ export type CategoryKey = IssueCategory;
 
 // Twitter sharing method - simplified deep link approach
 export type TwitterPostingMethod = 'twitter' | 'none';
+export type ReportSharingMethod = TwitterPostingMethod | 'bluesky';
 
 // Posting status (NOT resolution status - we don't track if authorities fixed issues)
 export type PostingStatus = 'pending' | 'posted' | 'failed';
@@ -31,6 +32,9 @@ export interface User {
 
   // USERNAME SELECTION - NEW per PRD Section 5.1.1
   username: string; // Chosen or auto-generated "Anonymous_Citizen_XXXX"
+  first_name?: string;
+  last_name?: string;
+  phone_number?: string | null;
   anonymousMode: boolean; // If true, hide real identity
   displayName?: string; // Real name (optional)
   full_name?: string; // DB field often used for display name/username in this codebase

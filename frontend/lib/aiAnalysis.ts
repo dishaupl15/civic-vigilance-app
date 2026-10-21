@@ -10,12 +10,14 @@ export type ImageAnalysis = {
   uncertainties: string[];
 };
 
-export async function requestImageAnalysis(imageUrl: string, privacyNoticeAccepted: boolean): Promise<ImageAnalysis> {
+export async function requestImageAnalysis(imageReference: string, privacyNoticeAccepted: boolean): Promise<ImageAnalysis> {
   const apiBase = resolveNodeApiBaseUrl(process.env.EXPO_PUBLIC_NODE_API_URL, __DEV__);
   if (!apiBase) throw new Error('Image analysis is not configured. Continue manually.');
   if (!isSupabaseConfigured) throw new Error('Sign in with the production service before requesting analysis.');
   if (!privacyNoticeAccepted) throw new Error('Review and accept the image-analysis privacy notice first.');
-  if (!/^https:\/\//i.test(imageUrl)) throw new Error('Upload the evidence photo before requesting analysis.');
+  if (!imageReference.startsWith('supabase-storage://private-issue-photos/')) {
+    throw new Error('Upload the evidence photo to private storage before requesting analysis.');
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20_000);
@@ -26,7 +28,7 @@ export async function requestImageAnalysis(imageUrl: string, privacyNoticeAccept
     const response = await fetch(`${apiBase.replace(/\/$/, '')}/analyze-image`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
-      body: JSON.stringify({ image_url: imageUrl, privacy_notice_accepted: true }),
+      body: JSON.stringify({ image_reference: imageReference, privacy_notice_accepted: true }),
       signal: controller.signal,
     });
     const body = await response.json().catch(() => ({}));

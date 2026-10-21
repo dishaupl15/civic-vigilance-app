@@ -11,11 +11,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../hooks/useAuth';
-import { TwitterPostingMethod, CategoryKey } from '../types';
+import { ReportSharingMethod, CategoryKey } from '../types';
 import { createIssue } from '../hooks/useIssues';
 import { MatchedAuthority } from '../lib/smartAuthorities';
 import { GeneratedReportContent } from '../lib/reportContentSchema';
-import { uploadPhotos } from '../lib/storage';
+import { deletePhoto, uploadPhotos } from '../lib/storage';
 import { composePostText, shareToTwitter, showShareDialog } from '../lib/sharingEnhanced';
 import { clearReportDraft, saveReportDraft } from '../lib/reportDrafts';
 import * as Crypto from 'expo-crypto';
@@ -26,6 +26,7 @@ import Stage2DetailsScreen from './reporting/Stage2DetailsScreen';
 import Stage3PrivacyScreen from './reporting/Stage3PrivacyScreen';
 import Stage4PreviewScreen from './reporting/Stage4PreviewScreen';
 import Stage5SuccessScreen from './reporting/Stage5SuccessScreen';
+import BlueskyShareModal from '../components/reporting/BlueskyShareModal';
 
 type Stage = 1 | 2 | 3 | 4 | 5;
 
@@ -41,6 +42,8 @@ interface ReportData {
   authoritySuggestions: MatchedAuthority[];
   generatedReportContents: { generationId: string; content: GeneratedReportContent }[];
   clientRequestId: string;
+  aiImageReference?: string;
+  aiImageUri?: string;
 
   // Stage 2
   title?: string;
@@ -48,7 +51,7 @@ interface ReportData {
   description?: string;
 
   // Stage 3
-  privacy?: TwitterPostingMethod;
+  privacy?: ReportSharingMethod;
   rememberChoice?: boolean;
 
   // Stage 4/5
@@ -62,6 +65,7 @@ export default function ReportIssueScreenV2() {
   const { session } = useAuth();
 
   const [currentStage, setCurrentStage] = useState<Stage>(1);
+  const [blueskyShareVisible, setBlueskyShareVisible] = useState(false);
   const [reportData, setReportData] = useState<ReportData>({
     photos: [],
     coords: null,
@@ -72,10 +76,17 @@ export default function ReportIssueScreenV2() {
     clientRequestId: Crypto.randomUUID(),
   });
   const submitting = useRef(false);
+  const submittedIssueId = useRef<string | null>(null);
 
   useEffect(() => {
     if (currentStage < 5) void saveReportDraft({ currentStage, reportData });
   }, [currentStage, reportData]);
+
+  useEffect(() => navigation.addListener('beforeRemove', () => {
+    if (reportData.aiImageReference && !submittedIssueId.current) {
+      void deletePhoto(reportData.aiImageReference);
+    }
+  }), [navigation, reportData.aiImageReference]);
 
   // Stage 1: Camera -> Stage 2: Details
   const handleStage1Complete = (
@@ -115,9 +126,17 @@ export default function ReportIssueScreenV2() {
     }));
   };
 
+  const handleAiImageReferenceChange = (reference?: string, photoUri?: string) => {
+    setReportData((current) => ({
+      ...current,
+      aiImageReference: reference,
+      aiImageUri: photoUri,
+    }));
+  };
+
   // Stage 3: Privacy -> Stage 4: Preview
   const handleStage3Complete = (privacyChoice: {
-    method: TwitterPostingMethod;
+    method: ReportSharingMethod;
     rememberChoice: boolean;
   }) => {
     setReportData({
@@ -144,13 +163,32 @@ export default function ReportIssueScreenV2() {
 
       // Step 1: Upload photos to Supabase Storage
       if (__DEV__) console.log('[Report] Uploading photos...');
-      const photoUrls = await uploadPhotos(
-        reportData.photos,
-        'issues',
-        true,
-        reportData.clientRequestId,
-        reportData.privacy === 'none'
-      );
+      const isPrivateReport = reportData.privacy === 'none';
+      const reusableAiImage = isPrivateReport
+        && reportData.aiImageReference
+        && reportData.aiImageUri === reportData.photos[0]
+        ? reportData.aiImageReference
+        : undefined;
+      const photoUrls = reusableAiImage
+        ? [
+          reusableAiImage,
+          ...(reportData.photos.length > 1
+            ? await uploadPhotos(
+              reportData.photos.slice(1),
+              'issues',
+              true,
+              `${reportData.clientRequestId}-remaining`,
+              true
+            )
+            : []),
+        ]
+        : await uploadPhotos(
+          reportData.photos,
+          'issues',
+          true,
+          reportData.clientRequestId,
+          isPrivateReport
+        );
 
       // Step 2: Create issue in database
       if (__DEV__) console.log('[Report] Creating issue in database...');
@@ -167,11 +205,15 @@ export default function ReportIssueScreenV2() {
         location_accuracy_m: reportData.locationAccuracy,
         location_source: reportData.locationSource || 'manual',
         location_confirmed: true,
-        privacy: reportData.privacy || 'none',
+        privacy: reportData.privacy === 'none' ? 'none' : 'twitter',
         authorities: reportData.selectedAuthorityHandles,
         authority_suggestions: reportData.authoritySuggestions,
         generated_contents: reportData.generatedReportContents,
       });
+      submittedIssueId.current = issueData.id;
+      if (!isPrivateReport && reportData.aiImageReference) {
+        await deletePhoto(reportData.aiImageReference);
+      }
 
       // Step 3: Share to Twitter via deep link (if user chose Twitter sharing)
       let externalComposerOpened = false;
@@ -194,6 +236,9 @@ export default function ReportIssueScreenV2() {
       setReportData({
         ...reportData,
         issueId: issueData.id,
+        title: issueData.title,
+        description: issueData.description,
+        photos: photoUrls,
         externalComposerOpened,
       });
 
@@ -235,12 +280,18 @@ export default function ReportIssueScreenV2() {
       lng: reportData.coords?.lng,
       category: reportData.category,
     });
-    showShareDialog({ text: tweetText });
+    showShareDialog(
+      { text: tweetText, imageUri: reportData.photos[0] },
+      undefined,
+      () => setBlueskyShareVisible(true)
+    );
   };
 
   const handleDone = () => {
     // Reset and go back to feed
+    submittedIssueId.current = null;
     setCurrentStage(1);
+    setBlueskyShareVisible(false);
     setReportData({
       photos: [],
       coords: null,
@@ -267,9 +318,19 @@ export default function ReportIssueScreenV2() {
       {currentStage === 2 && (
         <Stage2DetailsScreen
           photos={reportData.photos}
+          initialTitle={reportData.title || ''}
+          initialCategory={reportData.category || 'pothole'}
+          initialDescription={reportData.description || ''}
           initialAddress={reportData.address}
           coords={reportData.coords}
           accuracy={reportData.locationAccuracy}
+          initialLocationSource={reportData.locationSource}
+          initialSelectedAuthorityHandles={reportData.selectedAuthorityHandles}
+          initialAuthoritySuggestions={reportData.authoritySuggestions}
+          requestId={reportData.clientRequestId}
+          savedImageReference={reportData.aiImageReference}
+          savedImageUri={reportData.aiImageUri}
+          onImageReferenceChange={handleAiImageReferenceChange}
           onContinue={handleStage2Complete}
           onGeneratedReportContent={handleGeneratedReportContent}
           onBack={() => handleBack(1)}
@@ -305,12 +366,25 @@ export default function ReportIssueScreenV2() {
       {currentStage === 5 && (
         <Stage5SuccessScreen
           issueId={reportData.issueId || ''}
-          privacy={reportData.privacy || 'twitter'}
+          privacy={reportData.privacy === 'none' ? 'none' : 'twitter'}
+          title={reportData.title || ''}
+          description={reportData.description || ''}
+          photoUri={reportData.photos[0]}
           tweetUrl={reportData.tweetUrl}
           externalComposerOpened={reportData.externalComposerOpened}
           onViewPost={handleViewPost}
           onShareMore={handleShareMore}
           onDone={handleDone}
+        />
+      )}
+      {currentStage === 5 && reportData.issueId && (
+        <BlueskyShareModal
+          visible={blueskyShareVisible}
+          issueId={reportData.issueId}
+          title={reportData.title || ''}
+          description={reportData.description || ''}
+          photoUri={reportData.photos[0]}
+          onClose={() => setBlueskyShareVisible(false)}
         />
       )}
     </View>

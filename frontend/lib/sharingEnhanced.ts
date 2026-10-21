@@ -14,7 +14,7 @@
 import * as Sharing from 'expo-sharing';
 import * as Linking from 'expo-linking';
 import * as FileSystem from 'expo-file-system';
-import { Platform, Alert } from 'react-native';
+import { Platform, Alert, Share } from 'react-native';
 
 export interface ShareContent {
   text: string;
@@ -200,8 +200,11 @@ export async function shareViaSheet(content: ShareContent): Promise<boolean> {
         UTI: 'public.jpeg',
       });
     } else {
-      // Text-only share (fallback to Twitter for now)
-      await shareToTwitter(content);
+      const result = await Share.share({
+        title: 'Share Civic Vigilance report',
+        message: content.text,
+      });
+      return result.action === Share.sharedAction;
     }
 
     return true;
@@ -216,7 +219,8 @@ export async function shareViaSheet(content: ShareContent): Promise<boolean> {
  */
 export function showShareDialog(
   content: ShareContent,
-  onSuccess?: (platform: string) => void
+  onSuccess?: (platform: string) => void,
+  onBluesky?: () => void
 ): void {
   Alert.alert(
     'Share Issue',
@@ -261,6 +265,10 @@ export function showShareDialog(
           if (success && onSuccess) onSuccess('Native');
         },
       },
+      ...(onBluesky ? [{
+        text: '🦋 Bluesky',
+        onPress: onBluesky,
+      }] : []),
       {
         text: 'Cancel',
         style: 'cancel',

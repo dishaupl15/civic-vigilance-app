@@ -16,15 +16,20 @@ import {
   StyleSheet,
   Animated,
   Pressable,
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Button from '../../components/ui/Button';
 import { TwitterPostingMethod } from '../../types';
 import { Colors, Shadows, Typography, BorderRadius } from '../../constants/DesignSystem';
+import BlueskyPublishCard from '../../components/reporting/BlueskyPublishCard';
 
 interface Props {
   issueId: string;
   privacy: TwitterPostingMethod;
+  title: string;
+  description: string;
+  photoUri?: string;
   tweetUrl?: string;
   externalComposerOpened?: boolean;
   onViewPost: () => void;
@@ -35,6 +40,9 @@ interface Props {
 export default function Stage5SuccessScreen({
   issueId,
   privacy,
+  title,
+  description,
+  photoUri,
   tweetUrl,
   externalComposerOpened,
   onViewPost,
@@ -60,7 +68,7 @@ export default function Stage5SuccessScreen({
   }, []);
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.scrollView} contentContainerStyle={styles.container}>
       {/* Success Icon with Animation */}
       <Animated.View
         style={[
@@ -101,6 +109,13 @@ export default function Stage5SuccessScreen({
             <Text style={styles.summaryText}>Others can upvote to amplify</Text>
           </View>
         </View>
+
+        <BlueskyPublishCard
+          issueId={issueId}
+          title={title}
+          description={description}
+          photoUri={photoUri}
+        />
 
         {/* Prompt to share if user chose App Only */}
         {privacy === 'none' && (
@@ -143,13 +158,16 @@ export default function Stage5SuccessScreen({
           </Pressable>
         </View>
       </Animated.View>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  scrollView: {
     flex: 1,
+  },
+  container: {
+    flexGrow: 1,
     backgroundColor: Colors.background,
     alignItems: 'center',
     justifyContent: 'center',

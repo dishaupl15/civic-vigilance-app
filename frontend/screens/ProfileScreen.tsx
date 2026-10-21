@@ -1,46 +1,124 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Image, Pressable, Alert, ScrollView, StatusBar, SafeAreaView, Linking } from 'react-native';
+import { View, Text, StyleSheet, Image, Alert, ScrollView, StatusBar, Linking, Platform } from 'react-native';
 import { Colors, Typography, Spacing, Shadows, BorderRadius, Layout, colors, textColors } from '../constants/DesignSystem';
 import { useAuth } from '../hooks/useAuth';
 import ListItem from '../components/ListItem';
 import Button from '../components/ui/Button';
 import { Ionicons } from '@expo/vector-icons';
-import { loadProfile, saveProfile, pickAvatar } from '../lib/profile';
-import { LinearGradient } from 'expo-linear-gradient';
+import TextField from '../components/ui/TextField';
+import { loadProfile, saveProfile } from '../lib/profile';
+import { normalizePhoneNumber, validateEmail, validatePersonName, validatePhoneNumber } from '../lib/authValidation';
+import { validateUsername } from '../lib/username';
 
 export default function ProfileScreen({ navigation }: any) {
-  const { session, profile: authProfile, signOut, isGuest } = useAuth();
+  const { session, profile: authProfile, signOut, isGuest, refreshProfile } = useAuth();
   const userId = session?.user?.id || 'demo-user';
   const email = session?.user?.email || 'demo@example.com';
-  const [name, setName] = useState<string>('Civic User');
+  const [profileData, setProfileData] = useState<any>(authProfile);
   const [avatar, setAvatar] = useState<string | null>(null);
   const [joined, setJoined] = useState<string>('2025');
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [profileError, setProfileError] = useState('');
+  const [profileSuccess, setProfileSuccess] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [username, setUsername] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
 
   useEffect(() => {
+    let active = true;
     const run = async () => {
-      const p = await loadProfile(userId);
-      setName(p.full_name || 'Civic User');
-      setAvatar((p as any).photoURL as string || (p as any).avatar_url as string || null);
-      const year = new Date((p as any).createdAt || (p as any).created_at || Date.now()).getFullYear();
-      setJoined(String(year));
+      try {
+        const p = await loadProfile(userId);
+        if (!active) return;
+        setProfileData(p);
+        setAvatar((p as any).photoURL as string || (p as any).avatar_url as string || null);
+        const year = new Date((p as any).createdAt || (p as any).created_at || Date.now()).getFullYear();
+        setJoined(String(year));
+      } catch {
+        if (active) setProfileError('Could not load your profile. Check your connection and retry.');
+      }
     };
-    run();
+    void run();
+    return () => { active = false; };
   }, [userId]);
 
-  const onChangeAvatar = async () => {
-    if (isGuest) return;
-    const uri = await pickAvatar();
-    if (!uri) return;
-    const updated = await saveProfile({ id: userId, full_name: name, photoURL: uri } as any);
-    setAvatar((updated as any).photoURL as string || (updated as any).avatar_url as string || uri);
+  const startEditing = () => {
+    const savedFullName = String(profileData?.full_name || '').trim();
+    const savedNameParts = savedFullName.split(/\s+/);
+    setFirstName(profileData?.first_name || savedNameParts[0] || '');
+    setLastName(profileData?.last_name || savedNameParts.slice(1).join(' '));
+    setUsername(profileData?.username || '');
+    setPhoneNumber(profileData?.phone_number || '');
+    setProfileError('');
+    setProfileSuccess('');
+    setIsEditing(true);
+  };
+
+  const saveChanges = async () => {
+    if (isSaving) return;
+    const firstNameError = validatePersonName(firstName, 'First name');
+    if (firstNameError) return setProfileError(firstNameError);
+    const lastNameError = validatePersonName(lastName, 'Last name');
+    if (lastNameError) return setProfileError(lastNameError);
+    const emailError = validateEmail(email);
+    if (emailError) return setProfileError('The account email could not be verified. Sign out and sign in again.');
+    const cleanUsername = username.trim().toLowerCase();
+    if (cleanUsername) {
+      const usernameError = validateUsername(cleanUsername);
+      if (!usernameError.isValid) return setProfileError(usernameError.error || 'Enter a valid username.');
+    }
+    const phoneError = validatePhoneNumber(phoneNumber);
+    if (phoneError) return setProfileError(phoneError);
+
+    setIsSaving(true);
+    setProfileError('');
+    setProfileSuccess('');
+    try {
+      const first = firstName.trim();
+      const last = lastName.trim();
+      const updated = await saveProfile({
+        id: userId,
+        first_name: first,
+        last_name: last,
+        full_name: `${first} ${last}`,
+        username: cleanUsername || null,
+        phone_number: normalizePhoneNumber(phoneNumber) || null,
+      } as any);
+      setProfileData(updated);
+      await refreshProfile();
+      setProfileSuccess('Profile updated successfully.');
+      setIsEditing(false);
+    } catch (error: any) {
+      const code = String(error?.code || error?.details || '');
+      setProfileError(code.includes('23505')
+        ? 'That username is already in use. Choose another username.'
+        : 'Could not save your profile. Check your connection and try again.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const performSignOut = async () => {
     const result = await signOut();
-    if (result?.error) Alert.alert('Logout failed', result.error);
+    if (result?.error) {
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.alert(`Logout failed: ${result.error}`);
+      } else {
+        Alert.alert('Logout failed', result.error);
+      }
+    }
   };
 
   const onLogout = () => {
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm('You will need to sign in again to report issues.')) {
+        void performSignOut();
+      }
+      return;
+    }
+
     Alert.alert('Log out?', 'You will need to sign in again to report issues.', [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -63,7 +141,7 @@ export default function ProfileScreen({ navigation }: any) {
 
         {/* Profile Card */}
         <View style={styles.profileCard}>
-          <Pressable onPress={onChangeAvatar} style={styles.avatarContainer}>
+          <View style={styles.avatarContainer}>
             {avatar ? (
               <Image source={{ uri: avatar }} style={styles.avatar} />
             ) : (
@@ -71,19 +149,41 @@ export default function ProfileScreen({ navigation }: any) {
                 <Ionicons name="person" size={50} color={Colors.primary} />
               </View>
             )}
-            {!isGuest && (
-              <View style={styles.cameraIcon}>
-                <Ionicons name="camera" size={16} color="white" />
-              </View>
-            )}
-          </Pressable>
+          </View>
 
-          <Text style={styles.name}>{name}</Text>
+          <Text style={styles.name}>
+            {[profileData?.first_name, profileData?.last_name].filter(Boolean).join(' ')
+              || profileData?.full_name
+              || 'Complete your profile'}
+          </Text>
           <Text style={styles.email}>{email}</Text>
+          {!!profileData?.username && <Text style={styles.profileDetail}>@{profileData.username}</Text>}
+          {!!profileData?.phone_number && <Text style={styles.profileDetail}>{profileData.phone_number}</Text>}
           <View style={styles.joinedBadge}>
             <Text style={styles.joinedText}>Member since {joined}</Text>
           </View>
+          {profileError && !isEditing ? <Text accessibilityRole="alert" style={styles.profileError}>{profileError}</Text> : null}
+          {profileSuccess ? <Text accessibilityRole="text" style={styles.profileSuccess}>{profileSuccess}</Text> : null}
+          {!isGuest && !isEditing ? (
+            <Button title="Edit Profile" onPress={startEditing} variant="outline" style={styles.editProfileButton} />
+          ) : null}
         </View>
+
+        {isEditing && (
+          <View style={styles.editCard}>
+            <Text style={styles.sectionTitle}>Edit Profile</Text>
+            <Text style={styles.emailNote}>Email changes use the verified account email flow and can’t be edited here.</Text>
+            <TextField label="First name *" value={firstName} onChangeText={setFirstName} editable={!isSaving} autoCapitalize="words" autoCorrect={false} textContentType="givenName" />
+            <TextField label="Last name *" value={lastName} onChangeText={setLastName} editable={!isSaving} autoCapitalize="words" autoCorrect={false} textContentType="familyName" />
+            <TextField label="Username (optional)" value={username} onChangeText={setUsername} editable={!isSaving} autoCapitalize="none" autoCorrect={false} maxLength={20} textContentType="username" />
+            <TextField label="Phone number (optional)" value={phoneNumber} onChangeText={setPhoneNumber} editable={!isSaving} autoCapitalize="none" keyboardType="phone-pad" textContentType="telephoneNumber" placeholder="+14155552671" />
+            {profileError ? <Text accessibilityRole="alert" style={styles.profileError}>{profileError}</Text> : null}
+            <View style={styles.editActions}>
+              <Button title="Cancel" onPress={() => { setIsEditing(false); setProfileError(''); }} variant="outline" disabled={isSaving} style={{ flex: 1 }} />
+              <Button title={isSaving ? 'Saving…' : 'Save'} onPress={() => void saveChanges()} disabled={isSaving} style={{ flex: 1 }} />
+            </View>
+          </View>
+        )}
 
         {/* Statistics Row / Civic Impact Score */}
         <View style={styles.statsRow}>
@@ -180,19 +280,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: Colors.primaryLight,
   },
-  cameraIcon: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    backgroundColor: Colors.primary,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: Colors.surface,
-  },
   name: {
     ...Typography.h2,
     marginBottom: 4,
@@ -202,6 +289,33 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     marginBottom: Spacing.md,
   },
+  profileDetail: {
+    ...Typography.bodySm,
+    color: Colors.textSecondary,
+    marginBottom: Spacing.xs,
+  },
+  profileError: {
+    ...Typography.caption,
+    color: Colors.error,
+    marginTop: Spacing.sm,
+    textAlign: 'center',
+  },
+  profileSuccess: {
+    ...Typography.caption,
+    color: Colors.success,
+    marginTop: Spacing.sm,
+  },
+  editProfileButton: { alignSelf: 'stretch', marginTop: Spacing.md },
+  editCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.md,
+    marginBottom: Spacing.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  emailNote: { ...Typography.caption, color: Colors.textSecondary, marginBottom: Spacing.md },
+  editActions: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.sm },
   joinedBadge: {
     backgroundColor: Colors.surfaceHighlight,
     paddingHorizontal: 12,

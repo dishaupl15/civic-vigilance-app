@@ -18,7 +18,34 @@ jest.mock('@react-navigation/native', () => ({
 
 const mockUseAuth = jest.requireMock('../hooks/useAuth').useAuth;
 
+function fillSignupRequiredFields(screen: ReturnType<typeof render>) {
+  fireEvent.changeText(screen.getByLabelText('First name *'), 'Civic');
+  fireEvent.changeText(screen.getByLabelText('Last name *'), 'Citizen');
+  fireEvent.changeText(screen.getByLabelText('Email address *'), 'user@example.org');
+  fireEvent.changeText(screen.getByLabelText('Password'), 'StrongPass1');
+  fireEvent.changeText(screen.getByLabelText('Confirm password'), 'StrongPass1');
+}
+
 describe('authentication form submission guards', () => {
+  test('requires names and matching passwords before calling Supabase signup', async () => {
+    const signUp = jest.fn();
+    mockUseAuth.mockReturnValue({ signUp });
+    const screen = render(<SignupScreen />);
+
+    fireEvent.changeText(screen.getByLabelText('Email address *'), 'user@example.org');
+    fireEvent.changeText(screen.getByLabelText('Password'), 'StrongPass1');
+    fireEvent.changeText(screen.getByLabelText('Confirm password'), 'DifferentPass1');
+    fireEvent.press(screen.getByText('Sign up'));
+    expect(screen.getByText('First name is required.')).toBeTruthy();
+    expect(signUp).not.toHaveBeenCalled();
+
+    fireEvent.changeText(screen.getByLabelText('First name *'), 'Civic');
+    fireEvent.changeText(screen.getByLabelText('Last name *'), 'Citizen');
+    fireEvent.press(screen.getByText('Sign up'));
+    expect(screen.getByText('Passwords do not match.')).toBeTruthy();
+    expect(signUp).not.toHaveBeenCalled();
+  });
+
   test('does not start concurrent login requests from rapid repeated taps', async () => {
     let finishSignIn!: () => void;
     const signIn = jest.fn(
@@ -47,9 +74,7 @@ describe('authentication form submission guards', () => {
     );
     mockUseAuth.mockReturnValue({ signUp });
     const screen = render(<SignupScreen />);
-    fireEvent.changeText(screen.getByLabelText('Email'), 'user@example.org');
-    fireEvent.changeText(screen.getByLabelText('Password'), 'StrongPass1');
-    fireEvent.changeText(screen.getByLabelText('Confirm password'), 'StrongPass1');
+    fillSignupRequiredFields(screen);
 
     act(() => {
       fireEvent.press(screen.getByText('Sign up'));
@@ -57,6 +82,10 @@ describe('authentication form submission guards', () => {
     });
 
     expect(signUp).toHaveBeenCalledTimes(1);
+    expect(signUp).toHaveBeenCalledWith('user@example.org', 'StrongPass1', {
+      first_name: 'Civic',
+      last_name: 'Citizen',
+    });
     await act(async () => finishSignUp());
   });
 
@@ -67,9 +96,7 @@ describe('authentication form submission guards', () => {
       }),
     });
     const screen = render(<SignupScreen />);
-    fireEvent.changeText(screen.getByLabelText('Email'), 'user@example.org');
-    fireEvent.changeText(screen.getByLabelText('Password'), 'StrongPass1');
-    fireEvent.changeText(screen.getByLabelText('Confirm password'), 'StrongPass1');
+    fillSignupRequiredFields(screen);
 
     await act(async () => {
       fireEvent.press(screen.getByText('Sign up'));
@@ -86,9 +113,7 @@ describe('authentication form submission guards', () => {
       }),
     });
     const screen = render(<SignupScreen />);
-    fireEvent.changeText(screen.getByLabelText('Email'), 'user@example.org');
-    fireEvent.changeText(screen.getByLabelText('Password'), 'StrongPass1');
-    fireEvent.changeText(screen.getByLabelText('Confirm password'), 'StrongPass1');
+    fillSignupRequiredFields(screen);
 
     await act(async () => {
       fireEvent.press(screen.getByText('Sign up'));
@@ -98,15 +123,32 @@ describe('authentication form submission guards', () => {
     expect(screen.queryByText(/Signup did not establish an active session/i)).toBeNull();
   });
 
+  test('offers profile completion after Auth succeeds but profile save fails', async () => {
+    const signUp = jest.fn().mockResolvedValue({
+      data: { user: { id: 'user-123' }, session: { user: { id: 'user-123' } } },
+      error: 'Your account was created, but profile details could not be saved.',
+      code: 'auth/profile-save-failed',
+    });
+    mockUseAuth.mockReturnValue({ signUp });
+    const screen = render(<SignupScreen />);
+    fillSignupRequiredFields(screen);
+
+    await act(async () => {
+      fireEvent.press(screen.getByText('Sign up'));
+    });
+
+    expect(screen.getByText(/Your account was created/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Complete profile now' })).toBeTruthy();
+    expect(signUp).toHaveBeenCalledTimes(1);
+  });
+
   test('shows a safe existing-account message without confirmation prompts', async () => {
     const signUp = jest.fn().mockResolvedValue({
       data: { user: { identities: [] }, session: null },
     });
     mockUseAuth.mockReturnValue({ signUp });
     const screen = render(<SignupScreen />);
-    fireEvent.changeText(screen.getByLabelText('Email'), 'user@example.org');
-    fireEvent.changeText(screen.getByLabelText('Password'), 'StrongPass1');
-    fireEvent.changeText(screen.getByLabelText('Confirm password'), 'StrongPass1');
+    fillSignupRequiredFields(screen);
 
     await act(async () => {
       fireEvent.press(screen.getByText('Sign up'));

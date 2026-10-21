@@ -16,19 +16,19 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Button from '../../components/ui/Button';
-import { TwitterPostingMethod } from '../../types';
+import { ReportSharingMethod } from '../../types';
 
 interface Props {
   onContinue: (privacyChoice: {
-    method: TwitterPostingMethod;
+    method: ReportSharingMethod;
     rememberChoice: boolean;
   }) => void;
   onBack: () => void;
-  defaultMethod?: TwitterPostingMethod;
+  defaultMethod?: ReportSharingMethod;
 }
 
 export default function Stage3PrivacyScreen({ onContinue, onBack, defaultMethod }: Props) {
-  const [selectedMethod, setSelectedMethod] = useState<TwitterPostingMethod>(
+  const [selectedMethod, setSelectedMethod] = useState<ReportSharingMethod>(
     defaultMethod || 'twitter'
   );
 
@@ -44,7 +44,7 @@ export default function Stage3PrivacyScreen({ onContinue, onBack, defaultMethod 
       <View style={styles.header}>
         <Text style={styles.title}>How do you want to share?</Text>
         <Text style={styles.subtitle}>
-          Amplify your voice by sharing on X/Twitter, or keep it within the app
+          Choose how your report is shared publicly, or keep it private in the app.
         </Text>
       </View>
 
@@ -89,6 +89,47 @@ export default function Stage3PrivacyScreen({ onContinue, onBack, defaultMethod 
           <View style={styles.featureRow}>
             <Ionicons name="checkmark-circle" size={20} color="#34D399" />
             <Text style={styles.featureText}>No account linking needed</Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        accessibilityRole="radio"
+        accessibilityState={{ selected: selectedMethod === 'bluesky' }}
+        style={[
+          styles.optionCard,
+          selectedMethod === 'bluesky' && styles.blueskyOptionSelected,
+        ]}
+        onPress={() => setSelectedMethod('bluesky')}
+        testID="sharing-option-bluesky"
+      >
+        <View style={styles.optionHeader}>
+          <View style={[styles.iconContainer, selectedMethod === 'bluesky' && styles.blueskyIconSelected]}>
+            <Ionicons
+              name="share-social-outline"
+              size={26}
+              color={selectedMethod === 'bluesky' ? '#fff' : '#0085FF'}
+            />
+          </View>
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text style={styles.optionTitle}>Publish publicly on Bluesky</Text>
+            <Text style={styles.optionSubtitle}>
+              Preview your post, then confirm publication from the official Civic Vigilance account.
+            </Text>
+          </View>
+        </View>
+        <View style={styles.featureList}>
+          <View style={styles.featureRow}>
+            <Ionicons name="checkmark-circle" size={20} color="#34D399" />
+            <Text style={styles.featureText}>Your report and selected photo will be public</Text>
+          </View>
+          <View style={styles.featureRow}>
+            <Ionicons name="checkmark-circle" size={20} color="#34D399" />
+            <Text style={styles.featureText}>No personal Bluesky login required; the official account is administrator-configured</Text>
+          </View>
+          <View style={styles.featureRow}>
+            <Ionicons name="information-circle-outline" size={20} color="#0085FF" />
+            <Text style={styles.featureText}>Review the next-screen preview; publishing is never automatic</Text>
           </View>
         </View>
       </TouchableOpacity>
@@ -181,6 +222,13 @@ const styles = StyleSheet.create({
   optionCardSelected: {
     borderColor: '#2563EB',
     backgroundColor: '#EFF6FF',
+  },
+  blueskyOptionSelected: {
+    borderColor: '#0085FF',
+    backgroundColor: '#EFF7FF',
+  },
+  blueskyIconSelected: {
+    backgroundColor: '#0085FF',
   },
   optionHeader: {
     flexDirection: 'row',

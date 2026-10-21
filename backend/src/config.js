@@ -3,6 +3,10 @@ const REQUIRED_PRODUCTION_ENV = [
   'SUPABASE_URL',
 ];
 
+function isConfigured(value) {
+  return typeof value === 'string' && value.trim().length > 0 && !/YOUR_|your_|example\.com/i.test(value);
+}
+
 function isPlaceholder(value) {
   return !value || /YOUR_|your_|example\.com/i.test(value);
 }
@@ -46,6 +50,11 @@ function parseHttpsUrl(value, name) {
 function validateProductionEnv() {
   if (process.env.NODE_ENV !== 'production') return;
   const missing = REQUIRED_PRODUCTION_ENV.filter((name) => isPlaceholder(process.env[name]));
+  const hasBlueskyIdentifier = isConfigured(process.env.BLUESKY_IDENTIFIER);
+  const hasBlueskyPassword = isConfigured(process.env.BLUESKY_APP_PASSWORD);
+  if (hasBlueskyIdentifier !== hasBlueskyPassword) {
+    throw new Error('BLUESKY_IDENTIFIER and BLUESKY_APP_PASSWORD must either both be set or both be omitted.');
+  }
   if (isPlaceholder(getSupabaseClientKey())) missing.push('SUPABASE_PUBLISHABLE_KEY (or SUPABASE_ANON_KEY)');
   if (isPlaceholder(getSupabaseAdminKey())) missing.push('SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY)');
   if (missing.length) throw new Error(`Missing production environment variables: ${missing.join(', ')}`);
@@ -69,18 +78,20 @@ function validateProductionEnv() {
     if (url.origin !== origin) throw new Error('Every production ALLOWED_ORIGIN must contain only an origin, without a path.');
   }
 
-  const hasAiEndpoint = !isPlaceholder(process.env.AI_VISION_ENDPOINT);
-  const hasAiKey = !isPlaceholder(process.env.AI_VISION_API_KEY);
-  if (hasAiEndpoint !== hasAiKey) {
-    throw new Error('AI_VISION_ENDPOINT and AI_VISION_API_KEY must either both be set or both be omitted.');
+  if (!isConfigured(process.env.GROQ_API_KEY)) {
+    const hasAiEndpoint = !isPlaceholder(process.env.AI_VISION_ENDPOINT);
+    const hasAiKey = !isPlaceholder(process.env.AI_VISION_API_KEY);
+    if (hasAiEndpoint !== hasAiKey) {
+      throw new Error('AI_VISION_ENDPOINT and AI_VISION_API_KEY must either both be set or both be omitted.');
+    }
+    if (hasAiEndpoint) parseHttpsUrl(process.env.AI_VISION_ENDPOINT, 'AI_VISION_ENDPOINT');
+    const hasTextEndpoint = !isPlaceholder(process.env.AI_TEXT_ENDPOINT);
+    const hasTextKey = !isPlaceholder(process.env.AI_TEXT_API_KEY);
+    if (hasTextEndpoint !== hasTextKey) {
+      throw new Error('AI_TEXT_ENDPOINT and AI_TEXT_API_KEY must either both be set or both be omitted.');
+    }
+    if (hasTextEndpoint) parseHttpsUrl(process.env.AI_TEXT_ENDPOINT, 'AI_TEXT_ENDPOINT');
   }
-  if (hasAiEndpoint) parseHttpsUrl(process.env.AI_VISION_ENDPOINT, 'AI_VISION_ENDPOINT');
-  const hasTextEndpoint = !isPlaceholder(process.env.AI_TEXT_ENDPOINT);
-  const hasTextKey = !isPlaceholder(process.env.AI_TEXT_API_KEY);
-  if (hasTextEndpoint !== hasTextKey) {
-    throw new Error('AI_TEXT_ENDPOINT and AI_TEXT_API_KEY must either both be set or both be omitted.');
-  }
-  if (hasTextEndpoint) parseHttpsUrl(process.env.AI_TEXT_ENDPOINT, 'AI_TEXT_ENDPOINT');
 }
 
 module.exports = {

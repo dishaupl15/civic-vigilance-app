@@ -21,9 +21,10 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Button from '../../components/ui/Button';
-import { TwitterPostingMethod, CategoryKey } from '../../types';
+import { ReportSharingMethod, CategoryKey } from '../../types';
 import { MatchedAuthority } from '../../lib/smartAuthorities';
 import { Colors, Shadows, Typography, BorderRadius } from '../../constants/DesignSystem';
+import { formatBlueskyPostPreview } from '../../lib/blueskyApi';
 
 interface Props {
   photos: string[];
@@ -34,7 +35,7 @@ interface Props {
   coords: { lat: number; lng: number } | null;
   selectedAuthorityHandles: string[];
   authoritySuggestions: MatchedAuthority[];
-  privacy: TwitterPostingMethod;
+  privacy: ReportSharingMethod;
   onSubmit: () => void;
   onBack: () => void;
   onEditDetails: () => void;
@@ -116,7 +117,8 @@ export default function Stage4PreviewScreen({
     return tweetText;
   };
 
-  const tweetText = privacy !== 'none' ? generateTweetText() : null;
+  const tweetText = privacy === 'twitter' ? generateTweetText() : null;
+  const blueskyText = privacy === 'bluesky' ? formatBlueskyPostPreview(title, description) : null;
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -190,6 +192,44 @@ export default function Stage4PreviewScreen({
         </View>
       )}
 
+      {blueskyText && (
+        <View style={styles.section} testID="bluesky-report-preview">
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>🦋 Bluesky Preview</Text>
+            <Pressable onPress={onEditPrivacy}>
+              <Text style={styles.editLink}>Change</Text>
+            </Pressable>
+          </View>
+          <View style={styles.tweetCard}>
+            <View style={styles.tweetHeader}>
+              <View style={styles.tweetAvatar}>
+                <View style={[styles.avatarPlaceholder, { backgroundColor: '#0085FF' }]}>
+                  <Ionicons name="share-social-outline" size={20} color="#fff" />
+                </View>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.tweetDisplayName}>Civic Vigilance</Text>
+                <Text style={styles.tweetHandle}>Official account · Public post</Text>
+              </View>
+            </View>
+            <Text style={styles.tweetText} testID="bluesky-preview-text">{blueskyText}</Text>
+            {photos[0] ? (
+              <View style={styles.tweetMediaContainer}>
+                <Image
+                  source={{ uri: photos[0] }}
+                  style={[styles.tweetPhoto, styles.tweetPhotoSingle]}
+                  resizeMode="cover"
+                  accessibilityLabel="Photo that will be published publicly on Bluesky"
+                />
+              </View>
+            ) : null}
+          </View>
+          <Text style={styles.privacyNote}>
+            Review the text and photo carefully. Your report will be saved first; on the next screen, explicitly confirm publication through the administrator-configured official account. No personal Bluesky login is needed.
+          </Text>
+        </View>
+      )}
+
       {/* Authorities Section */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
@@ -259,7 +299,7 @@ export default function Stage4PreviewScreen({
           <Text style={styles.infoTitle}>ℹ️ What happens after you post?</Text>
           <Text style={styles.infoText}>
             ✅ Your issue appears in CivicVigilance feed{'\n'}
-            {privacy !== 'none' && authorities.length > 0 && '✅ Selected handles appear in your editable X draft\n'}
+            {privacy === 'twitter' && authorities.length > 0 && '✅ Selected handles appear in your editable X draft\n'}
             ✅ Community can upvote to amplify{'\n'}
             ✅ More upvotes = More visibility{'\n\n'}
             ⚠️ Note: We don't track government action.{'\n'}

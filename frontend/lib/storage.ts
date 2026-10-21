@@ -86,11 +86,21 @@ export async function uploadPhoto(
     const blob = await response.blob();
     if (!blob.type.startsWith('image/')) throw new Error('Only image uploads are supported.');
     if (blob.size <= 0 || blob.size > MAX_UPLOAD_BYTES) throw new Error('Photo must be between 1 byte and 10 MB after compression.');
+    const contentType = blob.type.split(';')[0].trim().toLowerCase() === 'image/jpg'
+      ? 'image/jpeg'
+      : blob.type.split(';')[0].trim().toLowerCase();
+    const knownExtensions: Record<string, string> = {
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/webp': 'webp',
+    };
+    const extension = knownExtensions[contentType]
+      || contentType.slice('image/'.length).replace(/[^a-z0-9.+-]/g, '');
+    if (!extension) throw new Error('The photo format could not be identified.');
 
     // Generate unique filename
-    const fileExt = 'jpg'; // Always use jpg after optimization
     const safeKey = stableKey?.replace(/[^a-zA-Z0-9_-]/g, '') || Crypto.randomUUID();
-    const fileName = `${safeKey}.${fileExt}`;
+    const fileName = `${safeKey}.${extension}`;
     const { data: authData } = await supabase.auth.getSession();
     const userId = authData?.session?.user?.id;
     if (!userId) throw new Error('Sign in before uploading report evidence.');
@@ -104,7 +114,7 @@ export async function uploadPhoto(
       const { data, error } = await supabase.storage
         .from(bucket)
         .upload(filePath, blob, {
-          contentType: 'image/jpeg',
+          contentType,
           cacheControl: '3600',
           upsert: Boolean(stableKey),
         });

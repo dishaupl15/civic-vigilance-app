@@ -16,6 +16,15 @@ export interface ReportContentInput {
   description: string;
 }
 
+export interface ReportImageAnalysis {
+  issue_category: CategoryKey;
+  description: string;
+  visible_evidence: string[];
+  confidence: number;
+  needs_review: boolean;
+  uncertainties: string[];
+}
+
 const CATEGORIES: CategoryKey[] = [
   'pothole', 'garbage', 'streetlight', 'drainage', 'water_supply', 'sewage',
   'traffic_signal', 'encroachment', 'stray_animals', 'parks', 'other',
@@ -23,10 +32,11 @@ const CATEGORIES: CategoryKey[] = [
 
 export function validateReportContentInput(
   report: ReportContentInput,
-  privacyNoticeAccepted: boolean
+  privacyNoticeAccepted: boolean,
+  hasImage = false
 ): ReportContentInput {
   if (!privacyNoticeAccepted) throw new Error('Accept the AI writing privacy notice before continuing.');
-  if (!report.description.trim() || report.description.trim().length < 10) {
+  if (!hasImage && (!report.description.trim() || report.description.trim().length < 10)) {
     throw new Error('Enter at least 10 characters of report details before generating content.');
   }
   if (report.title.length > 100 || report.description.length > 1000 || !CATEGORIES.includes(report.category)) {
@@ -36,6 +46,40 @@ export function validateReportContentInput(
     title: report.title.trim(),
     category: report.category,
     description: report.description.trim(),
+  };
+}
+
+export function parseReportImageAnalysis(value: unknown): ReportImageAnalysis {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('The AI service returned an invalid image analysis. Continue manually.');
+  }
+  const analysis = value as Record<string, unknown>;
+  const isStringList = (entry: unknown): entry is string[] => Array.isArray(entry)
+    && entry.length <= 10
+    && entry.every((item) => typeof item === 'string' && item.trim().length > 0 && item.length <= 300);
+  const visibleEvidence = analysis.visible_evidence;
+  const uncertainties = analysis.uncertainties;
+  if (typeof analysis.issue_category !== 'string'
+      || !CATEGORIES.includes(analysis.issue_category as CategoryKey)
+      || typeof analysis.description !== 'string'
+      || analysis.description.trim().length < 3
+      || analysis.description.length > 1000
+      || !isStringList(visibleEvidence)
+      || typeof analysis.confidence !== 'number'
+      || !Number.isFinite(analysis.confidence)
+      || analysis.confidence < 0
+      || analysis.confidence > 1
+      || typeof analysis.needs_review !== 'boolean'
+      || !isStringList(uncertainties)) {
+    throw new Error('The AI service returned an invalid image analysis. Continue manually.');
+  }
+  return {
+    issue_category: analysis.issue_category as CategoryKey,
+    description: analysis.description.trim(),
+    visible_evidence: [...visibleEvidence],
+    confidence: analysis.confidence,
+    needs_review: analysis.needs_review,
+    uncertainties: [...uncertainties],
   };
 }
 
@@ -58,7 +102,7 @@ export function parseReportContentResponse(value: unknown): GeneratedReportConte
   const isText = (field: unknown, max: number) =>
     typeof field === 'string' && field.trim().length > 0 && field.length <= max;
   if (!isText(result.title, 100)
-    || !isText(result.description, 1000)
+    || !isText(result.description, 500)
     || !isText(result.summary, 300)
     || !isText(result.awareness_caption, 500)
     || !Array.isArray(result.hashtags)

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { getBackend } from '../lib/backend';
 import { IssueCategory, IssueWithUserData } from '../types';
+import { ReportSharingMethod } from '../types';
 import { createIssueSqlite, listIssues as listIssuesSqlite, ensureSeedIssues } from '../lib/sqliteIssues';
 import { ensureSessionUserId } from '../lib/sqliteAuth';
 import { useAuth } from './useAuth';
@@ -208,7 +209,7 @@ export async function createIssue(payload: {
   location_accuracy_m?: number;
   location_source: 'gps' | 'manual';
   location_confirmed: boolean;
-  privacy: 'twitter' | 'none';
+  privacy: ReportSharingMethod;
   authorities?: string[];
   authority_suggestions?: MatchedAuthority[];
   generated_contents?: GeneratedReportSnapshot[];
@@ -311,7 +312,7 @@ export async function createIssue(payload: {
     location_source: sanitizedPayload.location_source,
     location_confirmed: sanitizedPayload.location_confirmed,
     authorities,
-    privacy: sanitizedPayload.privacy === 'twitter' ? 'personal' : 'none',
+    privacy: sanitizedPayload.privacy === 'none' ? 'none' : 'personal',
     visibility: sanitizedPayload.privacy === 'none' ? 'private' : 'public',
     anonymous_username: 'Anonymous Citizen',
     status: 'pending',
