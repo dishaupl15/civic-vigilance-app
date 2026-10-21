@@ -39,17 +39,49 @@ The server will be running on `http://localhost:3000`; API routes are mounted un
 
 ### Deploying to Vercel
 
-The Vercel serverless entry point is `api/[...path].js`. To keep an existing
-frontend Vercel deployment unchanged, create a separate Vercel project from
-this same repository and set its Root Directory to `backend`. Vercel then
-serves the Express app under `/api/*`. Configure the backend environment
-variables in that new project's settings. Do not change the existing
-frontend project's Root Directory to `backend`.
+The Vercel function entrypoint is `api/[...path].js`, which exports the
+Express application from `src/app.js`. The app mounts the API at `/api`; do
+not add a rewrite or another function that adds a second `/api` prefix. To
+keep an existing frontend Vercel deployment unchanged, use a separate Vercel
+project from this same repository and set its Root Directory to `backend`.
+Configure the backend environment variables in that project's settings. Do
+not change the existing frontend project's Root Directory to `backend`.
 
-After deployment, verify `/api/health`, then verify that the X routes return
-application responses rather than Vercel 404s. Set the frontend
-`EXPO_PUBLIC_NODE_API_URL` to the new backend project's public HTTPS URL ending
-in `/api`, and rebuild/re-publish the frontend app. Register
+For the production backend project, verify in Vercel **Settings → Build and
+Deployment** that the Root Directory is exactly `backend`, the connected
+repository is `dishaupl15/civic-vigilance-app`, and the Production Branch is
+`main`. Deploy the latest `main` commit; do not rely on a successful health
+check alone to establish that the route handlers are current.
+
+The application applies `/api` once in `src/app.js`, behind the
+`api/[...path].js` Vercel function. Keep that catch-all entrypoint and do not
+add a second `/api` prefix in a rewrite or in `EXPO_PUBLIC_NODE_API_URL`.
+
+After deployment, verify all of the following against the backend's public
+HTTPS origin. The frontend base URL must be that origin plus `/api`:
+
+| Request | Expected result without an access token |
+|---|---|
+| `GET /api/health` | `200` |
+| `GET /api/report-ai/capabilities` | `401` |
+| `GET /api/account/export` | `401` |
+| `GET /api/social/bluesky/status?issue_id=<valid-uuid>` | `401` |
+| `POST /api/social/bluesky/publish` | `401` |
+| `GET /api/x/connection` | `401` |
+| `POST /api/x/connect` | `401` |
+| `DELETE /api/x/connection` | `401` |
+| `GET /api/x/connect/callback?error=access_denied&state=invalid` | `302` or `503`, never `404` |
+
+Also verify `POST /api/analyze-image`, `POST
+/api/generate-report-content`, and `DELETE /api/account` return `401` without
+a token. A Vercel-branded `404` (for example, `X-Vercel-Error: NOT_FOUND`)
+means the deployed function did not handle the request. An application `401`
+confirms that the protected route was reached and authentication remains
+enabled.
+
+Set the frontend EAS `EXPO_PUBLIC_NODE_API_URL` to the verified backend HTTPS
+origin ending in `/api`, and rebuild/re-publish the frontend app only after
+these checks pass. Register
 `<backend-public-https-url>/api/x/connect/callback` as the X OAuth callback
 only after the backend domain is assigned and verified.
 

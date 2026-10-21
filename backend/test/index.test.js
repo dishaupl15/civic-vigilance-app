@@ -86,6 +86,10 @@ test('GET /api/health returns machine-readable health', async () => {
   expect(JSON.parse(response.body)).toEqual({ status: 'ok', service: 'civic-vigilance-api' });
 });
 
+test('Vercel catch-all exports the Express app that owns the /api routes', () => {
+  expect(app).toBe(require('../src/app'));
+});
+
 test.each([
   ['GET', '/api/report-ai/capabilities'],
   ['GET', '/api/account/export'],
