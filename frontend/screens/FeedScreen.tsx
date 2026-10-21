@@ -94,6 +94,8 @@ export default function FeedScreen() {
         <FlatList
           data={data}
           keyExtractor={(item) => String(item.id)}
+          refreshing={loading && data.length > 0}
+          onRefresh={retry}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
           renderItem={({ item }) => (

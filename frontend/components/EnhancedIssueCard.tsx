@@ -24,6 +24,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { IssueWithUserData } from '../types';
 import { castVote, getUserVote } from '../lib/votes';
 import { formatCount, getTimeAgo, formatDistance } from '../lib/format';
+import { composePostText, showShareDialog } from '../lib/sharingEnhanced';
 import { CATEGORY_EMOJIS } from './CategoryPicker';
 import { useAuth } from '../hooks/useAuth';
 
@@ -34,15 +35,17 @@ interface Props {
 }
 
 function EnhancedIssueCard({ item, onPress, distance }: Props) {
-  const { isGuest, signOut } = useAuth();
+  const { isGuest, signOut, session } = useAuth();
   const [vote, setVote] = useState<-1 | 0 | 1>(0);
   const [voteLoading, setVoteLoading] = useState(true);
   const [voteSubmitting, setVoteSubmitting] = useState(false);
   const [upvotes, setUpvotes] = useState(item.upvotes ?? 0);
+  const [downvotes, setDownvotes] = useState(item.downvotes ?? 0);
   const [imageError, setImageError] = useState(false);
 
   useEffect(() => {
     let active = true;
+    setVoteLoading(true);
     getUserVote(item.id).then((result) => {
       if (active) setVote(result.status === 'ready' ? result.vote : 0);
     }).catch(() => {
@@ -51,7 +54,12 @@ function EnhancedIssueCard({ item, onPress, distance }: Props) {
       if (active) setVoteLoading(false);
     });
     return () => { active = false; };
-  }, [item.id]);
+  }, [item.id, session?.user?.id]);
+
+  useEffect(() => {
+    setUpvotes(item.upvotes ?? 0);
+    setDownvotes(item.downvotes ?? 0);
+  }, [item.id, item.upvotes, item.downvotes]);
 
   const onVote = useCallback(async (val: -1 | 1) => {
     if (voteLoading || voteSubmitting) return;
@@ -64,41 +72,53 @@ function EnhancedIssueCard({ item, onPress, distance }: Props) {
     }
     setVoteSubmitting(true);
     const prev = vote;
-    // Optimistic update
     if (val === 1) {
       if (prev === 1) {
         setVote(0);
         setUpvotes(Math.max(0, upvotes - 1));
+      } else if (prev === -1) {
+        setVote(1);
+        setDownvotes(Math.max(0, downvotes - 1));
+        setUpvotes(upvotes + 1);
       } else {
         setVote(1);
         setUpvotes(upvotes + 1);
       }
+    } else if (prev === -1) {
+      setVote(0);
+      setDownvotes(Math.max(0, downvotes - 1));
+    } else if (prev === 1) {
+      setVote(-1);
+      setUpvotes(Math.max(0, upvotes - 1));
+      setDownvotes(downvotes + 1);
+    } else {
+      setVote(-1);
+      setDownvotes(downvotes + 1);
     }
 
     try {
       const res = await castVote(item.id, val);
       if (typeof res.upvotes === 'number') setUpvotes(res.upvotes);
+      if (typeof res.downvotes === 'number') setDownvotes(res.downvotes);
       setVote(res.vote);
       if (res.warning) Alert.alert('Vote saved', res.warning);
     } catch (cause) {
       setVote(prev);
       setUpvotes(item.upvotes ?? 0);
+      setDownvotes(item.downvotes ?? 0);
       Alert.alert('Vote not saved', cause instanceof Error ? cause.message : 'Please try again.');
     } finally {
       setVoteSubmitting(false);
     }
-  }, [vote, upvotes, item.id, item.upvotes, voteLoading, voteSubmitting, isGuest, signOut]);
+  }, [vote, upvotes, downvotes, item.id, item.upvotes, item.downvotes, voteLoading, voteSubmitting, isGuest, signOut]);
 
-  // Memoize expensive computations
   const categoryEmoji = useMemo(() =>
     CATEGORY_EMOJIS[item.category as keyof typeof CATEGORY_EMOJIS] || '⚠️',
     [item.category]
   );
 
   const privacyIndicator = useMemo(() => {
-    // Check if issue has tweetUrl (means it was posted to Twitter)
     const isPostedToTwitter = !!item.tweetUrl;
-
     if (isPostedToTwitter) {
       return { icon: 'logo-twitter', text: 'Posted to Twitter', color: '#1DA1F2' };
     }
@@ -109,8 +129,16 @@ function EnhancedIssueCard({ item, onPress, distance }: Props) {
   const formattedDistance = useMemo(() => formatDistance(distance), [distance]);
 
   const handleShare = useCallback(() => {
-    // TODO: Implement native share functionality
-  }, [item.id]);
+    const text = composePostText({
+      title: item.title,
+      description: item.description,
+      address: item.address,
+      lat: item.lat,
+      lng: item.lng,
+      category: item.category,
+    });
+    showShareDialog({ text, imageUri: item.imageUrl });
+  }, [item.title, item.description, item.address, item.lat, item.lng, item.category, item.imageUrl]);
 
   return (
     <TouchableOpacity
@@ -147,15 +175,12 @@ function EnhancedIssueCard({ item, onPress, distance }: Props) {
 
       {/* Metadata Row */}
       <View style={styles.metaRow}>
-        {/* Distance (if nearby sort) */}
         {distance !== undefined && formattedDistance !== '' && (
           <View style={styles.metaItem}>
             <Ionicons name="location" size={14} color="#6B7280" />
             <Text style={styles.metaText}>{formattedDistance}</Text>
           </View>
         )}
-
-        {/* Address */}
         <View style={[styles.metaItem, { flex: 1 }]}>
           <Ionicons name="location-outline" size={14} color="#6B7280" />
           <Text style={styles.metaText} numberOfLines={1}>
@@ -186,12 +211,19 @@ function EnhancedIssueCard({ item, onPress, distance }: Props) {
 
       {/* Action Bar - Reddit Style Pills */}
       <View style={styles.actionBar}>
-        {/* Vote Pill */}
         <View style={styles.votePill}>
           <Pressable
-            onPress={() => onVote(1)}
+            onPress={(event) => {
+              event.stopPropagation();
+              void onVote(1);
+            }}
             style={styles.pillBtn}
             hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Upvote"
+            accessibilityState={{ selected: vote === 1, disabled: voteLoading || voteSubmitting }}
+            testID={`upvote-${item.id}`}
+            disabled={voteLoading || voteSubmitting}
           >
             <Ionicons
               name={vote === 1 ? 'arrow-up' : 'arrow-up-outline'}
@@ -205,9 +237,17 @@ function EnhancedIssueCard({ item, onPress, distance }: Props) {
           </Text>
 
           <Pressable
-            onPress={() => onVote(-1)}
+            onPress={(event) => {
+              event.stopPropagation();
+              void onVote(-1);
+            }}
             style={styles.pillBtn}
             hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Downvote"
+            accessibilityState={{ selected: vote === -1, disabled: voteLoading || voteSubmitting }}
+            testID={`downvote-${item.id}`}
+            disabled={voteLoading || voteSubmitting}
           >
             <Ionicons
               name={vote === -1 ? 'arrow-down' : 'arrow-down-outline'}
@@ -217,17 +257,30 @@ function EnhancedIssueCard({ item, onPress, distance }: Props) {
           </Pressable>
         </View>
 
-        {/* Comment Pill */}
-        <Pressable onPress={onPress} style={styles.pill} hitSlop={8}>
+        <Pressable
+          onPress={(event) => {
+            event.stopPropagation();
+            onPress?.();
+          }}
+          style={styles.pill}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Open comments"
+        >
           <Ionicons name="chatbubble-outline" size={18} color="#E0E0E0" />
           <Text style={styles.pillText}>{formatCount(item.commentsCount || 0)}</Text>
         </Pressable>
 
-        {/* Share Pill */}
         <Pressable
-          onPress={handleShare}
+          onPress={(event) => {
+            event.stopPropagation();
+            handleShare();
+          }}
           style={styles.pill}
           hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Share report"
+          testID={`share-${item.id}`}
         >
           <Ionicons name="share-outline" size={18} color="#E0E0E0" />
           <Text style={styles.pillText}>Share</Text>

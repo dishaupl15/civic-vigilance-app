@@ -1,4 +1,5 @@
 import React from 'react';
+import { FlatList } from 'react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 import FeedScreen from '../screens/FeedScreen';
 
@@ -44,5 +45,21 @@ describe('FeedScreen report states', () => {
 
     expect(screen.getByText('Quiet Neighborhood')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Retry loading reports' })).toBeNull();
+  });
+
+  test('pull-to-refresh reloads the feed', () => {
+    const retry = jest.fn();
+    mockUseIssues.mockReturnValue({
+      data: [{ id: 'issue-1' }],
+      loading: false,
+      error: null,
+      retry,
+    });
+    const screen = render(<FeedScreen />);
+    const list = screen.UNSAFE_getByType(FlatList);
+
+    expect(list.props.refreshing).toBe(false);
+    list.props.onRefresh();
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 });
