@@ -1,5 +1,5 @@
 const http = require('http');
-const app = require('../api/[...path]');
+const app = require('..');
 const { validateAnalysis } = require('../src/ai-analysis');
 const { parsePort } = require('../src/config');
 const {
@@ -80,13 +80,23 @@ test('GET /api reports server health', async () => {
   expect(JSON.parse(response.body)).toEqual({ service: 'civic-vigilance-api', status: 'ok' });
 });
 
+test('GET / returns a safe backend status response', async () => {
+  const response = await request('/');
+  expect(response.status).toBe(200);
+  expect(JSON.parse(response.body)).toEqual({
+    service: 'Civic Vigilance API',
+    status: 'ok',
+  });
+});
+
 test('GET /api/health returns machine-readable health', async () => {
   const response = await request('/api/health');
   expect(response.status).toBe(200);
   expect(JSON.parse(response.body)).toEqual({ status: 'ok', service: 'civic-vigilance-api' });
 });
 
-test('Vercel catch-all exports the Express app that owns the /api routes', () => {
+test('package entrypoint exports the Vercel Express application', () => {
+  expect(require('../package.json').main).toBe('src/app.js');
   expect(app).toBe(require('../src/app'));
 });
 

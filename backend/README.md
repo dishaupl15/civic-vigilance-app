@@ -39,13 +39,15 @@ The server will be running on `http://localhost:3000`; API routes are mounted un
 
 ### Deploying to Vercel
 
-The Vercel function entrypoint is `api/[...path].js`, which exports the
-Express application from `src/app.js`. The app mounts the API at `/api`; do
-not add a rewrite or another function that adds a second `/api` prefix. To
-keep an existing frontend Vercel deployment unchanged, use a separate Vercel
-project from this same repository and set its Root Directory to `backend`.
-Configure the backend environment variables in that project's settings. Do
-not change the existing frontend project's Root Directory to `backend`.
+Vercel uses its zero-configuration Express detection to deploy the app
+exported by `src/app.js` as one function. `package.json` points its `main`
+entry to that app; the local `npm start` command continues to use `src/index.js`.
+There is no separate function under `api/` and no rewrite. The app mounts API
+routes at `/api` exactly once. To keep an existing frontend Vercel deployment
+unchanged, use a separate Vercel project from this same repository and set
+its Root Directory to `backend`. Configure the backend environment variables
+in that project's settings. Do not change the existing frontend project's
+Root Directory to `backend`.
 
 For the production backend project, verify in Vercel **Settings → Build and
 Deployment** that the Root Directory is exactly `backend`, the connected
@@ -53,9 +55,8 @@ repository is `dishaupl15/civic-vigilance-app`, and the Production Branch is
 `main`. Deploy the latest `main` commit; do not rely on a successful health
 check alone to establish that the route handlers are current.
 
-The application applies `/api` once in `src/app.js`, behind the
-`api/[...path].js` Vercel function. Keep that catch-all entrypoint and do not
-add a second `/api` prefix in a rewrite or in `EXPO_PUBLIC_NODE_API_URL`.
+The application applies `/api` once in `src/app.js`. Do not add a second
+`/api` prefix in a rewrite or in `EXPO_PUBLIC_NODE_API_URL`.
 
 After deployment, verify all of the following against the backend's public
 HTTPS origin. The frontend base URL must be that origin plus `/api`:

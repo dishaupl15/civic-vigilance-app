@@ -2,7 +2,7 @@
   "name": "civic-vigilance-backend",
   "version": "1.0.0",
   "description": "Node.js API for Civic Vigilance.",
-  "main": "src/index.js",
+  "main": "src/app.js",
   "engines": {
     "node": ">=22"
   },
