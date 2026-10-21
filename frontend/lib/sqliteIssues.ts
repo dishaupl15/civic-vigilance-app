@@ -27,23 +27,6 @@ export function createIssueSqlite(payload: NewIssue) {
   return db.getFirstSync?.('SELECT * FROM issues WHERE id=?', [id]);
 }
 
-export function ensureSeedIssues(userId: number) {
-  const db = getDB();
-  const row: any = db.getFirstSync?.('SELECT COUNT(*) as c FROM issues');
-  if (row?.c > 0) return;
-  const now = new Date().toISOString();
-  const samples: NewIssue[] = [
-    { user_id: userId, title: 'Pothole near Maple St.', description: 'Large pothole causing bikes to swerve.', category: 'pothole', image_url: 'https://picsum.photos/seed/pothole/800/500', lat: 37.776, lng: -122.42, address: 'Maple St & 8th Ave' },
-    { user_id: userId, title: 'Streetlight not working', description: 'Dark corner near the park.', category: 'streetlight', image_url: 'https://picsum.photos/seed/light/800/500', lat: 37.78, lng: -122.41, address: 'Pine Park' },
-    { user_id: userId, title: 'Garbage pileup', description: 'Needs pickup, smells bad.', category: 'garbage', image_url: 'https://picsum.photos/seed/garbage/800/500', lat: 37.781, lng: -122.418, address: '5th & Pine' }
-  ];
-  db.withTransactionSync?.(() => {
-    for (const s of samples) {
-      db.runSync?.(`INSERT INTO issues(user_id,title,description,category,image_url,lat,lng,address,created_at,upvotes,downvotes) VALUES (?,?,?,?,?,?,?,?,?, ?, ?);`, [s.user_id, s.title, s.description ?? null, s.category, s.image_url ?? null, s.lat ?? null, s.lng ?? null, s.address ?? null, now, Math.floor(Math.random()*20)+1, Math.floor(Math.random()*3)]);
-    }
-  });
-}
-
 export function listUserIssues(userId: number) {
   const db = getDB();
   return db.getAllSync?.('SELECT * FROM issues WHERE user_id=? ORDER BY datetime(created_at) DESC', [userId]) as any[];

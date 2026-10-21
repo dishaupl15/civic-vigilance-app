@@ -21,9 +21,13 @@ const ownerOrServiceOnlyProbes = [
   { table: 'user_stats', columns: 'user_id,total_posts,total_upvotes,total_comments,total_shares' },
   { table: 'issue_events', columns: 'id,issue_id,event_type,source,details,created_by,created_at' },
   { table: 'follow_up_reminders', columns: 'id,issue_id,user_id,due_at,status,created_at' },
+  { table: 'resolution_evidence', columns: 'id,issue_id,user_id,photo_path,note,appears_fixed,citizen_confirmed,created_at' },
+  { table: 'pending_twitter_posts', columns: 'id,issue_id,user_id,method,tweet_text,image_url,authorities,attempts,status,created_at' },
   { table: 'issue_authority_suggestions', columns: 'id,issue_id,user_id,authority_id,display_name,public_handle,category,relevance_reason,selected,created_at' },
   { table: 'issue_generated_content', columns: 'id,issue_id,user_id,generation_id,category,content_type,generated_content,created_at' },
   { table: 'bluesky_publications', columns: 'report_id,user_id,status,post_uri,post_url,created_at,updated_at' },
+  { table: 'user_x_connections', columns: 'user_id,x_user_id,x_username,connection_status,scopes,token_expires_at,refresh_lock_id,refresh_lock_until' },
+  { table: 'x_oauth_attempts', columns: 'state_hash,user_id,verifier_ciphertext,token_key_id,expires_at,created_at' },
 ];
 
 async function probe({ table, columns }, restrictedAccessExpected) {
@@ -59,8 +63,55 @@ async function probe({ table, columns }, restrictedAccessExpected) {
   return false;
 }
 
+async function checkPublicFeed() {
+  const endpoint = new URL('/rest/v1/issues', process.env.EXPO_PUBLIC_SUPABASE_URL);
+  endpoint.searchParams.set('select', '*,issue_metrics(upvotes,downvotes,comments,shares,twitter_impressions)');
+  endpoint.searchParams.set('order', 'created_at.desc');
+  endpoint.searchParams.set('limit', '1');
+  try {
+    const response = await fetch(endpoint, {
+      headers: {
+        apikey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY}`,
+      },
+    });
+    if (!response.ok) {
+      let code = '';
+      try {
+        code = (await response.json()).code || '';
+      } catch {
+        code = '';
+      }
+      console.error(`Public report feed query failed (HTTP ${response.status}${code ? ` ${code}` : ''}).`);
+      return false;
+    }
+    const reports = await response.json();
+    if (!Array.isArray(reports)) {
+      console.error('Public report feed returned an unexpected response.');
+      return false;
+    }
+    console.log(`Public report feed query passed (${reports.length ? 'public reports available' : 'no public reports currently'}).`);
+    return true;
+  } catch (error) {
+    console.error(`Public report feed query could not complete (${error.name || 'network error'}).`);
+    return false;
+  }
+}
+
 async function checkNodeApi() {
   const baseUrl = process.env.EXPO_PUBLIC_NODE_API_URL.replace(/\/+$/, '');
+  try {
+    const rootResponse = await fetch(new URL('/', `${baseUrl}/`));
+    const root = await rootResponse.json();
+    if (rootResponse.status !== 200 || root.service !== 'Civic Vigilance API' || root.status !== 'ok') {
+      console.error(`Node API root returned HTTP ${rootResponse.status} or an unexpected status response.`);
+      return false;
+    }
+    console.log('Node API root status check passed.');
+  } catch (error) {
+    console.error(`Node API root check could not complete (${error.name || 'network error'}).`);
+    return false;
+  }
   const endpoint = new URL('health', `${baseUrl}/`);
   try {
     const response = await fetch(endpoint);
@@ -149,12 +200,23 @@ async function main() {
   }
 
   let hasFailures = false;
+  const expectedBuckets = [
+    ['EXPO_PUBLIC_STORAGE_BUCKET', 'issue-photos'],
+    ['EXPO_PUBLIC_PRIVATE_STORAGE_BUCKET', 'private-issue-photos'],
+  ];
+  for (const [name, expected] of expectedBuckets) {
+    if (process.env[name] !== expected) {
+      console.error(`${name} does not match the bucket provisioned by the database migrations.`);
+      hasFailures = true;
+    }
+  }
   for (const query of publicTableProbes) {
     if (!await probe(query, false)) hasFailures = true;
   }
   for (const query of ownerOrServiceOnlyProbes) {
     if (!await probe(query, true)) hasFailures = true;
   }
+  if (!await checkPublicFeed()) hasFailures = true;
   if (!await checkNodeApi()) hasFailures = true;
   if (hasFailures) process.exitCode = 1;
 }

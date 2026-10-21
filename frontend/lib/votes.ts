@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, isSupabaseConfigured } from './supabase';
 import { getBackend } from './backend';
 import { castVoteSqlite, getUserVoteSqlite } from './sqliteIssues';
@@ -17,17 +16,7 @@ export interface CastVoteResult {
   warning?: string;
 }
 
-const VOTES_KEY = 'demo_votes';
 const activeVoteKeys = new Set<string>();
-
-async function readVotes(): Promise<Record<string, number>> {
-  const raw = await AsyncStorage.getItem(VOTES_KEY);
-  return raw ? JSON.parse(raw) as Record<string, number> : {};
-}
-
-async function writeVotes(map: Record<string, number>): Promise<void> {
-  await AsyncStorage.setItem(VOTES_KEY, JSON.stringify(map));
-}
 
 function parseVote(value: unknown): VoteValue {
   return value === -1 || value === 1 ? value : 0;
@@ -37,11 +26,6 @@ export async function getUserVote(issueId: string): Promise<UserVoteResult> {
   if (getBackend() === 'sqlite') {
     const userId = await ensureSessionUserId();
     const vote = parseVote(getUserVoteSqlite(Number(issueId), userId));
-    return { status: 'ready', vote, hasVote: vote !== 0 };
-  }
-  if (issueId.startsWith('dummy-')) {
-    const map = await readVotes();
-    const vote = parseVote(map[issueId]);
     return { status: 'ready', vote, hasVote: vote !== 0 };
   }
   if (!isSupabaseConfigured) return { status: 'unconfigured' };
@@ -67,15 +51,6 @@ export async function castVote(issueId: string, value: -1 | 1): Promise<CastVote
   if (getBackend() === 'sqlite') {
     const userId = await ensureSessionUserId();
     return castVoteSqlite(Number(issueId), userId, value);
-  }
-  if (issueId.startsWith('dummy-')) {
-    const map = await readVotes();
-    const current = parseVote(map[issueId]);
-    const next: VoteValue = current === value ? 0 : value;
-    if (next === 0) delete map[issueId];
-    else map[issueId] = next;
-    await writeVotes(map);
-    return { vote: next };
   }
   if (!isSupabaseConfigured) throw new Error('Voting is unavailable because Supabase is not configured.');
 

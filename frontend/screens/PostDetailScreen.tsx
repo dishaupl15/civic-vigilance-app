@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, Image, TouchableOpacity, Linking, Alert } from 'react-native';
+import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, Image, TouchableOpacity, Linking, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { Comment, IssueWithUserData } from '../types';
@@ -15,6 +15,7 @@ import { showShareDialog, composePostText } from '../lib/sharingEnhanced';
 import { mapDatabaseCommentRow, mapDatabaseIssueRow, mapLocalCommentRow, mapLocalIssueRow } from '../lib/issueMapper';
 import { loadIssueEnhancements, SavedIssueEnhancements } from '../lib/issueEnhancements';
 import BlueskyShareModal from '../components/reporting/BlueskyShareModal';
+import { formatSupabaseError } from '../lib/supabaseError';
 
 export default function PostDetailScreen({ route }: any) {
   const { id } = route.params as { id: string };
@@ -31,6 +32,8 @@ export default function PostDetailScreen({ route }: any) {
   const [commentSubmitting, setCommentSubmitting] = useState(false);
   const [commentError, setCommentError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [issueLoading, setIssueLoading] = useState(true);
+  const [issueRetry, setIssueRetry] = useState(0);
   const [savedEnhancements, setSavedEnhancements] = useState<SavedIssueEnhancements | null>(null);
   const [enhancementsLoading, setEnhancementsLoading] = useState(false);
   const [enhancementsError, setEnhancementsError] = useState<string | null>(null);
@@ -47,48 +50,11 @@ export default function PostDetailScreen({ route }: any) {
     let active = true;
     const run = async () => {
       try {
+        setIssueLoading(true);
         setLoadError(null);
         setSavedEnhancements(null);
         setEnhancementsLoading(false);
         setEnhancementsError(null);
-        if (id.startsWith('dummy-')) {
-        // Mock data for dummy issues
-        const dummyIssue: IssueWithUserData = {
-          id,
-          userId: 'user-1',
-          title: id === 'dummy-1' ? 'Pothole on Main St causing traffic' : (id === 'dummy-2' ? 'Overflowing Garbage Bin' : 'Broken Streetlight'),
-          description: id === 'dummy-1'
-            ? 'Large pothole in the middle lane causing severe slowdowns during rush hour. Several cars have been damaged.'
-            : 'The garbage bin at the market entrance has been overflowing for 3 days. Foul smell and attracting stray animals.',
-          category: id === 'dummy-1' ? 'pothole' : (id === 'dummy-2' ? 'garbage' : 'streetlight'),
-          photos: [],
-          imageUrl: id === 'dummy-1'
-            ? 'https://images.unsplash.com/photo-1515162816999-a0c47dc192f7?auto=format&fit=crop&q=80&w=800'
-            : (id === 'dummy-2' ? 'https://images.unsplash.com/photo-1530587191325-3db32d826c18?auto=format&fit=crop&q=80&w=800' : 'https://images.unsplash.com/photo-1555677284-6a6f9716399a?auto=format&fit=crop&q=80&w=800'),
-          address: 'Mumbai, India',
-          privacy: 'twitter',
-          metrics: { upvotes: 42, downvotes: 2, comments: 4, shares: 8, twitterImpressions: 1250 },
-          anonymousUsername: 'Citizen_One',
-          createdAt: new Date().toISOString(),
-          isVerified: true,
-          tweetUrl: 'https://twitter.com/CivicVigilance/status/1234567890'
-        };
-
-        const dummyComments: Comment[] = [
-          { id: 'c1', reportId: id, userId: 'u2', content: 'I saw this too! It\'s getting worse.', createdAt: new Date(), edited: false },
-          { id: 'c2', reportId: id, userId: 'u3', content: 'Has anyone reported this to the council?', createdAt: new Date(), edited: false },
-          { id: 'c3', reportId: id, userId: 'u4', content: 'Yes, I tagged them on Twitter.', createdAt: new Date(), edited: false, parentId: 'c2' },
-          { id: 'c4', reportId: id, userId: 'u5', content: 'Good job!', createdAt: new Date(), edited: false, parentId: 'c3' },
-        ];
-
-        if (!active) return;
-        setIssue(dummyIssue);
-        setComments(dummyComments);
-        setUp(dummyIssue.metrics?.upvotes ?? 0);
-        setDown(dummyIssue.metrics?.downvotes ?? 0);
-        return;
-      }
-
       if (getBackend() === 'sqlite') {
         const localIssue = mapLocalIssueRow(getIssueByIdSqlite(Number(id)));
         const localComments = listCommentsSqlite(Number(id)).map(mapLocalCommentRow);
@@ -104,10 +70,7 @@ export default function PostDetailScreen({ route }: any) {
           .select('*,issue_metrics(upvotes,downvotes,comments,shares,twitter_impressions)')
           .eq('id', id)
           .maybeSingle();
-        if (error) {
-          const details = [error.code, error.message].filter(Boolean).join(': ');
-          throw new Error(details ? `Could not load this report (${details}).` : 'Could not load this report.');
-        }
+        if (error) throw new Error(formatSupabaseError(error, 'Could not load this report.'));
         if (!data) throw new Error('This report was not found or is not available to your account.');
         const mappedIssue = await mapDatabaseIssueRow(data);
         const { data: commentRows, error: commentsError } = await supabase
@@ -115,10 +78,7 @@ export default function PostDetailScreen({ route }: any) {
           .select('*')
           .eq('issue_id', id)
           .order('created_at', { ascending: true });
-        if (commentsError) {
-          const details = [commentsError.code, commentsError.message].filter(Boolean).join(': ');
-          throw new Error(details ? `Could not load comments for this report (${details}).` : 'Could not load comments for this report.');
-        }
+        if (commentsError) throw new Error(formatSupabaseError(commentsError, 'Could not load comments for this report.'));
         const mappedComments = (commentRows ?? []).map(mapDatabaseCommentRow);
         if (!active) return;
         setIssue(mappedIssue);
@@ -132,9 +92,10 @@ export default function PostDetailScreen({ route }: any) {
               if (active) setSavedEnhancements(enhancements);
             })
             .catch((cause) => {
-              if (active) setEnhancementsError(cause instanceof Error
-                ? cause.message
-                : 'Could not load saved report assistance.');
+              if (active) setEnhancementsError(formatSupabaseError(
+                cause,
+                'Could not load saved report assistance.',
+              ));
             })
             .finally(() => {
               if (active) setEnhancementsLoading(false);
@@ -144,12 +105,14 @@ export default function PostDetailScreen({ route }: any) {
         }
       }
       } catch (cause) {
-        if (active) setLoadError(cause instanceof Error ? cause.message : 'Could not load this report.');
+        if (active) setLoadError(formatSupabaseError(cause, 'Could not load this report.'));
+      } finally {
+        if (active) setIssueLoading(false);
       }
     };
     void run();
     return () => { active = false; };
-  }, [id, session?.user?.id, enhancementRetry]);
+  }, [id, session?.user?.id, enhancementRetry, issueRetry]);
 
   useEffect(() => {
     let active = true;
@@ -360,11 +323,27 @@ export default function PostDetailScreen({ route }: any) {
   if (!issue) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFFFFF' }}>
-        <Ionicons name="alert-circle-outline" size={64} color="#D1D5DB" />
-        <Text style={{ fontSize: 18, fontWeight: '600', color: '#6B7280', marginTop: 16 }}>Issue not found</Text>
-        <Text style={{ fontSize: 14, color: '#9CA3AF', marginTop: 8 }}>
-          {loadError || 'This issue may have been removed or is unavailable.'}
+        {issueLoading
+          ? <ActivityIndicator accessibilityLabel="Loading report" />
+          : <Ionicons name="alert-circle-outline" size={64} color="#D1D5DB" />}
+        <Text style={{ fontSize: 18, fontWeight: '600', color: '#6B7280', marginTop: 16 }}>
+          {issueLoading ? 'Loading report…' : loadError ? 'Could not open this report' : 'Issue not found'}
         </Text>
+        {!issueLoading && (
+          <Text accessibilityRole={loadError ? 'alert' : undefined} style={{ fontSize: 14, color: '#9CA3AF', marginTop: 8 }}>
+            {loadError || 'This issue may have been removed or is unavailable.'}
+          </Text>
+        )}
+        {!!loadError && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading report"
+            onPress={() => setIssueRetry((attempt) => attempt + 1)}
+            style={{ minHeight: 44, justifyContent: 'center', marginTop: 12, paddingHorizontal: 16 }}
+          >
+            <Text style={{ color: '#2563EB', fontWeight: '600' }}>Retry</Text>
+          </Pressable>
+        )}
       </View>
     );
   }

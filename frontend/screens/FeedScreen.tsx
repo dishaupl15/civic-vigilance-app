@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, FlatList, SafeAreaView, StyleSheet, Text, Image, StatusBar } from 'react-native';
+import { View, FlatList, SafeAreaView, StyleSheet, Text, StatusBar, ActivityIndicator, Pressable } from 'react-native';
 import * as Location from 'expo-location';
 import Header from '../components/Header';
 import SortBar from '../components/SortBar';
@@ -8,12 +8,11 @@ import { useIssues } from '../hooks/useIssues';
 import { useNavigation } from '@react-navigation/native';
 import { calculateDistance } from '../lib/geohash';
 import { Colors, Typography, Spacing } from '../constants/DesignSystem';
-import { LinearGradient } from 'expo-linear-gradient';
 
 export default function FeedScreen() {
   const [sort, setSort] = useState<'trending' | 'newest' | 'nearby'>('nearby');
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const { data, loading, error } = useIssues(sort, coords);
+  const { data, loading, error, retry } = useIssues(sort, coords);
   const navigation = useNavigation<any>();
 
   useEffect(() => {
@@ -72,7 +71,26 @@ export default function FeedScreen() {
           )}
         </View>
 
-        {error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
+        {error && (
+          <View style={styles.errorContainer}>
+            <Text accessibilityRole="alert" style={styles.error}>{error}</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading reports"
+              onPress={retry}
+              style={styles.retryButton}
+            >
+              <Text style={styles.retryText}>Retry</Text>
+            </Pressable>
+          </View>
+        )}
+        {loading && data.length === 0 && (
+          <ActivityIndicator
+            accessibilityLabel="Loading reports"
+            color={Colors.primary}
+            style={styles.loading}
+          />
+        )}
         <FlatList
           data={data}
           keyExtractor={(item) => String(item.id)}
@@ -85,7 +103,7 @@ export default function FeedScreen() {
               onPress={() => navigation.navigate('PostDetail', { id: item.id })}
             />
           )}
-          ListEmptyComponent={!loading ? <EmptyState /> : null}
+          ListEmptyComponent={!loading && !error ? <EmptyState /> : null}
         />
       </SafeAreaView>
     </View>
@@ -114,8 +132,29 @@ const styles = StyleSheet.create({
   error: {
     ...Typography.body,
     color: Colors.error,
-    paddingHorizontal: Spacing.screenPadding,
-    paddingVertical: Spacing.sm,
+  },
+  errorContainer: {
+    marginHorizontal: Spacing.screenPadding,
+    padding: Spacing.md,
+    borderRadius: 12,
+    backgroundColor: Colors.surface,
+    gap: Spacing.sm,
+  },
+  retryButton: {
+    alignSelf: 'flex-start',
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.md,
+    borderRadius: 8,
+    backgroundColor: Colors.primary,
+  },
+  retryText: {
+    ...Typography.body,
+    color: Colors.surface,
+    fontWeight: '600',
+  },
+  loading: {
+    marginTop: Spacing.xl,
   },
   listContent: {
     paddingHorizontal: Spacing.screenPadding,

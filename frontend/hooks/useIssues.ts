@@ -3,7 +3,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { getBackend } from '../lib/backend';
 import { IssueCategory, IssueWithUserData } from '../types';
 import { ReportSharingMethod } from '../types';
-import { createIssueSqlite, listIssues as listIssuesSqlite, ensureSeedIssues } from '../lib/sqliteIssues';
+import { createIssueSqlite, listIssues as listIssuesSqlite } from '../lib/sqliteIssues';
 import { ensureSessionUserId } from '../lib/sqliteAuth';
 import { useAuth } from './useAuth';
 import { calculateDistance, encodeGeohash } from '../lib/geohash';
@@ -15,74 +15,16 @@ import {
 } from '../lib/reportValidation';
 import { MatchedAuthority } from '../lib/smartAuthorities';
 import { GeneratedReportSnapshot, saveIssueEnhancements } from '../lib/issueEnhancements';
+import { formatSupabaseError } from '../lib/supabaseError';
 
 type SortMode = 'trending' | 'newest' | 'nearby';
-
-function reportQueryError(fallback: string, error: { code?: string; message?: string }): Error {
-  const details = [error.code, error.message].filter(Boolean).join(': ');
-  return new Error(details ? `${fallback} (${details})` : fallback);
-}
 
 export function useIssues(sort: SortMode, coords?: { lat: number; lng: number } | null) {
   const [data, setData] = useState<IssueWithUserData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const { session } = useAuth();
-
-  /* DUMMY DATA FOR GUEST MODE */
-  const DUMMY_ISSUES: IssueWithUserData[] = [
-    {
-      id: 'dummy-1',
-      userId: 'user-1',
-      title: 'Pothole on Main St causing traffic',
-      description: 'Large pothole in the middle lane causing severe slowdowns during rush hour. Several cars have been damaged.',
-      category: 'pothole',
-      photos: ['https://images.unsplash.com/photo-1515162816999-a0c47dc192f7?auto=format&fit=crop&q=80&w=800'],
-      location: { lat: 19.0760, lng: 72.8777, address: 'Main Street, Mumbai', geohash: 'te7u' },
-      privacy: 'twitter',
-      status: 'posted',
-      anonymousUsername: 'Citizen_One',
-      metrics: { upvotes: 42, downvotes: 2, comments: 15, shares: 8 },
-      moderation: { flagged: false, reviewed: true, status: 'active' },
-      authorities: [],
-      createdAt: new Date(Date.now() - 3600000), // 1 hour ago
-      updatedAt: new Date(),
-    },
-    {
-      id: 'dummy-2',
-      userId: 'user-2',
-      title: 'Overflowing Garbage Bin',
-      description: 'The garbage bin at the market entrance has been overflowing for 3 days. Foul smell and attracting stray animals.',
-      category: 'garbage',
-      photos: ['https://images.unsplash.com/photo-1530587191325-3db32d826c18?auto=format&fit=crop&q=80&w=800'],
-      location: { lat: 19.0800, lng: 72.8800, address: 'Market Road, Mumbai', geohash: 'te7u' },
-      privacy: 'twitter',
-      status: 'pending',
-      anonymousUsername: 'Eco_Warrior',
-      metrics: { upvotes: 128, downvotes: 5, comments: 45, shares: 32 },
-      moderation: { flagged: false, reviewed: false, status: 'active' },
-      authorities: [],
-      createdAt: new Date(Date.now() - 86400000), // 1 day ago
-      updatedAt: new Date(),
-    },
-    {
-      id: 'dummy-3',
-      userId: 'user-3',
-      title: 'Broken Streetlight',
-      description: 'Streetlight #452 is not working. The area is very dark and unsafe at night for pedestrians.',
-      category: 'streetlight',
-      photos: ['https://images.unsplash.com/photo-1555677284-6a6f9716399a?auto=format&fit=crop&q=80&w=800'],
-      location: { lat: 19.0820, lng: 72.8820, address: 'Park Avenue, Mumbai', geohash: 'te7u' },
-      privacy: 'twitter',
-      status: 'posted',
-      anonymousUsername: 'Night_Owl',
-      metrics: { upvotes: 15, downvotes: 0, comments: 3, shares: 1 },
-      moderation: { flagged: false, reviewed: false, status: 'active' },
-      authorities: [],
-      createdAt: new Date(Date.now() - 172800000), // 2 days ago
-      updatedAt: new Date(),
-    }
-  ];
 
   useEffect(() => {
     let active = true;
@@ -90,50 +32,10 @@ export function useIssues(sort: SortMode, coords?: { lat: number; lng: number } 
       setLoading(true);
       setError(null);
 
-      // Check for guest user in session
-      const isGuest = session?.user?.email === '__guest__';
-
-      if (isGuest) {
-        // Return sorted dummy data for visualization
-        if (__DEV__) console.log('[useIssues] Serving dummy data for Guest Mode');
-        await new Promise(r => setTimeout(r, 500)); // Fake network delay
-        if (!active) return;
-
-        // Clone to avoid mutating sorting reference
-        let sortedIssues = [...DUMMY_ISSUES];
-
-        if (sort === 'newest') {
-          sortedIssues.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        } else if (sort === 'trending') {
-          sortedIssues.sort((a, b) => (b.metrics?.upvotes || 0) - (a.metrics?.upvotes || 0));
-        } else if (sort === 'nearby') {
-          if (coords) {
-            const distance = (issue: IssueWithUserData) =>
-              issue.lat !== undefined && issue.lng !== undefined
-                ? calculateDistance(coords.lat, coords.lng, issue.lat, issue.lng)
-                : Number.POSITIVE_INFINITY;
-            sortedIssues.sort((a, b) => distance(a) - distance(b));
-          } else {
-            sortedIssues.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-          }
-        }
-
-        setData(sortedIssues);
-        setLoading(false);
-        return;
-      }
-
-      if (getBackend() === 'supabase' && !session?.user?.id) {
-        setData([]);
-        setLoading(false);
-        return;
-      }
-
       try {
         if (getBackend() === 'sqlite') {
           const uid = await ensureSessionUserId();
           if (!active) return;
-          ensureSeedIssues(uid);
           const reports = listIssuesSqlite(sort === 'trending' ? sort : 'newest').map(mapLocalIssueRow);
           if (sort === 'nearby' && coords) {
             reports.sort((a, b) => {
@@ -152,7 +54,7 @@ export function useIssues(sort: SortMode, coords?: { lat: number; lng: number } 
             .select('*,issue_metrics(upvotes,downvotes,comments,shares,twitter_impressions)')
             .order('created_at', { ascending: false })
             .limit(100);
-          if (queryError) throw reportQueryError('Could not load reports.', queryError);
+          if (queryError) throw queryError;
 
           const reports = await Promise.all((rows ?? []).map(mapDatabaseIssueRow));
           if (!active) return;
@@ -173,7 +75,7 @@ export function useIssues(sort: SortMode, coords?: { lat: number; lng: number } 
         }
       } catch (cause) {
         if (active) {
-          setError(cause instanceof Error ? cause.message : 'Could not load reports.');
+          setError(formatSupabaseError(cause, 'Could not load reports.'));
           setData([]);
         }
       } finally {
@@ -182,9 +84,9 @@ export function useIssues(sort: SortMode, coords?: { lat: number; lng: number } 
     };
     void run();
     return () => { active = false; };
-  }, [sort, coords?.lat, coords?.lng, session?.user?.id, session?.user?.email]);
+  }, [sort, coords?.lat, coords?.lng, session?.user?.id, retryCount]);
 
-  return { data, loading, error };
+  return { data, loading, error, retry: () => setRetryCount((attempt) => attempt + 1) };
 }
 
 // Basic XSS sanitization for user input

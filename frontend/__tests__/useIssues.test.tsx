@@ -48,21 +48,15 @@ describe('useIssues report loading', () => {
     mockMapDatabaseIssueRow.mockImplementation(async (row) => row);
   });
 
-  test('waits for an authenticated session before querying reports', async () => {
+  test('loads public reports without requiring an authenticated session', async () => {
     mockSession = null;
-    const { result, rerender } = renderHook(() => useIssues('newest'));
-
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.data).toEqual([]);
-    expect(result.current.error).toBeNull();
-    expect(mockFrom).not.toHaveBeenCalled();
-
-    mockSession = { user: { id: 'user-123', email: 'user@example.org' } };
-    await act(async () => rerender());
+    const { result } = renderHook(() => useIssues('newest'));
 
     await waitFor(() => expect(mockLimit).toHaveBeenCalledWith(100));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(mockFrom).toHaveBeenCalledWith('issues');
+    expect(result.current.error).toBeNull();
+    expect(result.current.data).toEqual([]);
   });
 
   test('maps authenticated report rows and includes the metrics relation', async () => {
@@ -88,16 +82,32 @@ describe('useIssues report loading', () => {
     expect(result.current.error).toBeNull();
   });
 
-  test('preserves Supabase query error details for diagnosis', async () => {
+  test('does not expose raw Supabase schema errors or treat failures as empty results', async () => {
     mockLimit.mockResolvedValue({
       data: null,
-      error: { code: '42501', message: 'permission denied for table issues' },
+      error: { code: 'PGRST205', message: "Could not find the table 'public.issues' in the schema cache" },
     });
     const { result } = renderHook(() => useIssues('newest'));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.data).toEqual([]);
-    expect(result.current.error).toContain('42501');
-    expect(result.current.error).toContain('permission denied for table issues');
+    expect(result.current.error).toBe('Could not load reports. The data service is unavailable. Please try again.');
+  });
+
+  test('retry performs a new request after a failed report load', async () => {
+    mockLimit
+      .mockResolvedValueOnce({
+        data: null,
+        error: { code: 'PGRST205', message: 'Missing relation' },
+      })
+      .mockResolvedValueOnce({ data: [{ id: 'issue-2' }], error: null });
+    const { result } = renderHook(() => useIssues('newest'));
+
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    await act(async () => result.current.retry());
+
+    await waitFor(() => expect(result.current.data).toEqual([{ id: 'issue-2' }]));
+    expect(mockLimit).toHaveBeenCalledTimes(2);
+    expect(result.current.error).toBeNull();
   });
 });
