@@ -1,5 +1,7 @@
 import { resolveNodeApiBaseUrl } from './nodeApiUrl';
 import { CategoryKey } from '../types';
+import { getBackend } from './backend';
+import { isSupabaseConfigured, supabase } from './supabase';
 import {
   GeneratedReportContent,
   parseReportImageAnalysis,
@@ -23,25 +25,29 @@ export interface ReportAiCapabilities {
 async function authenticatedApiRequest(path: string, init?: RequestInit) {
   const apiBase = resolveNodeApiBaseUrl(process.env.EXPO_PUBLIC_NODE_API_URL, __DEV__);
   if (!apiBase) throw new Error('AI writing assistance is unavailable in this configuration.');
-  const { getBackend } = await import('./backend');
   if (getBackend() !== 'supabase') {
     throw new Error('Photo-based AI writing requires the online Civic Vigilance backend.');
   }
-  const { supabase, isSupabaseConfigured } = await import('./supabase');
   if (!isSupabaseConfigured) throw new Error('AI writing assistance requires an online account.');
   const { data, error } = await supabase.auth.getSession();
   if (error || !data.session?.access_token) {
     throw new Error('Sign in again before requesting AI writing assistance.');
   }
 
-  const response = await fetch(`${apiBase.replace(/\/$/, '')}${path}`, {
-    ...init,
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${data.session.access_token}`,
-      ...(init?.headers || {}),
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${apiBase.replace(/\/$/, '')}${path}`, {
+      ...init,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${data.session.access_token}`,
+        ...(init?.headers || {}),
+      },
+    });
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === 'AbortError') throw cause;
+    throw new Error('Could not reach Civic Vigilance AI services. Check your internet connection and retry.');
+  }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(typeof body.error === 'string'

@@ -14,6 +14,7 @@
 import { supabase, isSupabaseConfigured } from './supabase';
 import { getBackend } from './backend';
 import { optimizeImage, needsOptimization } from './imageOptimizer';
+import { File } from 'expo-file-system';
 import * as FileSystem from 'expo-file-system';
 import * as Crypto from 'expo-crypto';
 
@@ -24,6 +25,45 @@ const STORAGE_BUCKET = process.env.EXPO_PUBLIC_STORAGE_BUCKET || 'issue-photos';
 const PRIVATE_STORAGE_BUCKET = process.env.EXPO_PUBLIC_PRIVATE_STORAGE_BUCKET || 'private-issue-photos';
 const STORAGE_REFERENCE_PREFIX = 'supabase-storage://';
 
+class PhotoUploadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PhotoUploadError';
+  }
+}
+
+function getStorageFailure(error: unknown): PhotoUploadError {
+  const details = error && typeof error === 'object'
+    ? error as { message?: unknown; name?: unknown; status?: unknown; statusCode?: unknown }
+    : {};
+  const status = Number(details.status || details.statusCode);
+  if (details.message === 'Photo storage request timed out.' || details.name === 'AbortError') {
+    return new PhotoUploadError('Photo upload timed out. Check your connection and try again.');
+  }
+  if (status === 401 || status === 403) {
+    return new PhotoUploadError('Photo storage denied this upload. Sign in again and retry.');
+  }
+  if (status === 413) {
+    return new PhotoUploadError('The photo exceeds the storage size limit. Choose a smaller photo and retry.');
+  }
+  if (status === 415) {
+    return new PhotoUploadError('Photo storage does not accept this image format. Choose another photo.');
+  }
+  if (status === 404) {
+    return new PhotoUploadError('The photo storage service is not configured correctly. Contact support.');
+  }
+  if (status === 429) {
+    return new PhotoUploadError('Photo storage is busy. Wait a moment and retry.');
+  }
+  if (status >= 500) {
+    return new PhotoUploadError('Photo storage is temporarily unavailable. Try again shortly.');
+  }
+  if (status >= 400) {
+    return new PhotoUploadError('Photo storage rejected this upload. Choose another photo or sign in again.');
+  }
+  return new PhotoUploadError('Could not connect to photo storage. Check your internet connection and try again.');
+}
+
 /** Exponential backoff retry helper */
 async function withRetry<T>(fn: () => Promise<T>, maxRetries = MAX_RETRIES): Promise<T> {
   let lastError: any;
@@ -32,10 +72,19 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = MAX_RETRIES): Pro
       return await fn();
     } catch (err) {
       lastError = err;
-      if (attempt < maxRetries - 1) {
+      const details = err && typeof err === 'object'
+        ? err as { name?: unknown; status?: unknown; statusCode?: unknown; message?: unknown }
+        : {};
+      const status = Number(details.status || details.statusCode);
+      const retryable = details.name !== 'AbortError'
+        && details.message !== 'Photo storage request timed out.'
+        && (!status || status === 408 || status === 429 || status >= 500);
+      if (attempt < maxRetries - 1 && retryable) {
         const delay = BASE_DELAY_MS * Math.pow(2, attempt);
         if (__DEV__) console.log(`[Storage] Retry ${attempt + 1}/${maxRetries} after ${delay}ms`);
         await new Promise(r => setTimeout(r, delay));
+      } else {
+        throw err;
       }
     }
   }
@@ -81,14 +130,39 @@ export async function uploadPhoto(
       if (__DEV__) console.log(`[Storage] Optimized image size: ${optimized.size} bytes`);
     }
 
-    // Convert local URI to blob for upload
-    const response = await fetch(uploadUri);
-    const blob = await response.blob();
-    if (!blob.type.startsWith('image/')) throw new Error('Only image uploads are supported.');
-    if (blob.size <= 0 || blob.size > MAX_UPLOAD_BYTES) throw new Error('Photo must be between 1 byte and 10 MB after compression.');
-    const contentType = blob.type.split(';')[0].trim().toLowerCase() === 'image/jpg'
+    let file: File;
+    let fileBytes: Uint8Array<ArrayBuffer>;
+    try {
+      file = new File(uploadUri);
+      if (file.size > MAX_UPLOAD_BYTES) {
+        throw new PhotoUploadError('Photo must be between 1 byte and 10 MB after compression.');
+      }
+      fileBytes = await file.bytes();
+    } catch (error) {
+      if (error instanceof PhotoUploadError) throw error;
+      throw new PhotoUploadError('Could not read the selected photo from this device. Select it again and retry.');
+    }
+    if (fileBytes.byteLength <= 0 || fileBytes.byteLength > MAX_UPLOAD_BYTES) {
+      throw new PhotoUploadError('Photo must be between 1 byte and 10 MB after compression.');
+    }
+    const extensionFromName = file.name.split('.').pop()?.toLowerCase();
+    const extensionTypes: Record<string, string> = {
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+      webp: 'image/webp',
+      gif: 'image/gif',
+    };
+    const fileType = file.type.split(';')[0].trim().toLowerCase();
+    const detectedType = fileType.startsWith('image/')
+      ? fileType
+      : extensionTypes[extensionFromName || ''] || fileType;
+    const contentType = detectedType.split(';')[0].trim().toLowerCase() === 'image/jpg'
       ? 'image/jpeg'
-      : blob.type.split(';')[0].trim().toLowerCase();
+      : detectedType.split(';')[0].trim().toLowerCase();
+    if (!contentType.startsWith('image/')) {
+      throw new PhotoUploadError('The selected file is not a supported image. Choose a photo and retry.');
+    }
     const knownExtensions: Record<string, string> = {
       'image/jpeg': 'jpg',
       'image/png': 'png',
@@ -96,7 +170,7 @@ export async function uploadPhoto(
     };
     const extension = knownExtensions[contentType]
       || contentType.slice('image/'.length).replace(/[^a-z0-9.+-]/g, '');
-    if (!extension) throw new Error('The photo format could not be identified.');
+    if (!extension) throw new PhotoUploadError('The photo format could not be identified.');
 
     // Generate unique filename
     const safeKey = stableKey?.replace(/[^a-zA-Z0-9_-]/g, '') || Crypto.randomUUID();
@@ -113,14 +187,14 @@ export async function uploadPhoto(
     const publicUrl = await withRetry(async () => {
       const { data, error } = await supabase.storage
         .from(bucket)
-        .upload(filePath, blob, {
+        .upload(filePath, fileBytes.buffer, {
           contentType,
           cacheControl: '3600',
           upsert: Boolean(stableKey),
         });
 
       if (error) {
-        throw new Error(`Failed to upload photo: ${error.message}`);
+        throw error;
       }
 
       if (isPrivate) {
@@ -146,8 +220,9 @@ export async function uploadPhoto(
     }
     return publicUrl;
   } catch (error: any) {
-    console.error('[Storage] Upload failed after retries:', error);
-    throw new Error(error?.message || 'Photo upload failed. Your draft has been preserved.');
+    if (__DEV__) console.warn('[Storage] Upload failed:', error?.name || 'unknown error');
+    if (error instanceof PhotoUploadError) throw error;
+    throw getStorageFailure(error);
   }
 }
 

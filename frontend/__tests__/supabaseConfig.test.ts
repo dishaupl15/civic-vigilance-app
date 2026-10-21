@@ -38,8 +38,55 @@ describe('Supabase client configuration', () => {
           persistSession: true,
           autoRefreshToken: true,
         }),
+        global: expect.objectContaining({
+          fetch: expect.any(Function),
+        }),
       }),
     );
+  });
+
+  test('aborts Supabase Storage uploads that exceed the timeout', async () => {
+    const projectUrl = 'https://csxempaxpiuyfyszjqfu.supabase.co';
+    process.env.EXPO_PUBLIC_SUPABASE_URL = projectUrl;
+    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'unit-test-anon-key-value-not-a-secret';
+    const originalFetch = global.fetch;
+    const fetchMock = jest.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      }),
+    ) as typeof fetch;
+    global.fetch = fetchMock;
+    jest.useFakeTimers();
+    const createClient = jest.fn(() => ({}));
+    jest.doMock('react-native-url-polyfill/auto', () => ({}));
+    jest.doMock('@supabase/supabase-js', () => ({ createClient }));
+    jest.doMock('@react-native-async-storage/async-storage', () => ({
+      __esModule: true,
+      default: {},
+    }));
+
+    try {
+      jest.isolateModules(() => {
+        require('../lib/supabase');
+      });
+      const options = (createClient.mock.calls as unknown as [
+        string,
+        string,
+        { global: { fetch: typeof fetch } },
+      ][])[0][2];
+      const upload = options.global.fetch(
+        `${projectUrl}/storage/v1/object/private-issue-photos/user/issues/evidence.jpg`,
+        { method: 'POST' },
+      );
+      const timedOut = expect(upload).rejects.toThrow('Photo storage request timed out.');
+
+      await jest.advanceTimersByTimeAsync(30_000);
+      await timedOut;
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+      global.fetch = originalFetch;
+    }
   });
 
   test('does not return a success-shaped client when Supabase is unconfigured', () => {

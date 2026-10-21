@@ -166,6 +166,40 @@ describe('report AI assistance', () => {
     expect(onUseDescription).toHaveBeenCalledWith(content.description);
   });
 
+  it('shows an actionable upload error and retries upload before AI generation', async () => {
+    jest.mocked(uploadPhoto)
+      .mockRejectedValueOnce(new Error('Could not connect to photo storage. Check your internet connection and try again.'))
+      .mockResolvedValueOnce('supabase-storage://private-issue-photos/user/issues/request-ai.jpg');
+    jest.mocked(requestReportContent).mockResolvedValue(generated);
+    const screen = render(
+      <ReportAiAssistance
+        photos={['file:///evidence.jpg']}
+        title=""
+        category="pothole"
+        description="A pothole is visible in the road surface."
+        requestId="request"
+        onImageReferenceChange={jest.fn()}
+        onGenerated={jest.fn()}
+        onUseTitle={jest.fn()}
+        onUseDescription={jest.fn()}
+        onUseCategory={jest.fn()}
+      />
+    );
+    fireEvent.press(screen.getByLabelText('Consent to send the selected photo and report details for AI assistance'));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Generate related content' }).props.accessibilityState.disabled).toBe(false);
+    });
+
+    fireEvent.press(screen.getByRole('button', { name: 'Generate related content' }));
+    expect(await screen.findByText(/Could not connect to photo storage/)).toBeTruthy();
+    expect(requestReportContent).not.toHaveBeenCalled();
+
+    fireEvent.press(screen.getByRole('button', { name: 'Generate related content' }));
+    await waitFor(() => expect(screen.getByText('Photo analyzed. Suggestions are ready for your review.')).toBeTruthy());
+    expect(uploadPhoto).toHaveBeenCalledTimes(2);
+    expect(requestReportContent).toHaveBeenCalledTimes(1);
+  });
+
   it('retries a failed generation without re-uploading the same private photo', async () => {
     jest.mocked(requestReportContent)
       .mockRejectedValueOnce(new Error('Vision provider is temporarily unavailable.'))
